@@ -40,7 +40,25 @@ message Request {
     RevealRequest reveal = 9;
     OcrRequest ocr = 10;
     ExportRequest export = 11;
+    UnpackRequest unpack = 12;
   }
+}
+
+// Expand an uploaded archive into dest_dir (asset pool flow). Security:
+// entries escaping dest_dir (zip-slip) are rejected; entry count and
+// total decompressed size caps are enforced; junk entries
+// (__MACOSX / ._ / .DS_Store) are skipped.
+message UnpackRequest {
+  string path = 1;
+  string dest_dir = 2;
+  int32 max_entries = 3; // default 10000
+  int64 max_bytes = 4; // default 10 GiB
+}
+
+message UnpackResult {
+  repeated string file_paths = 1; // relative to dest_dir
+  int64 total_bytes = 2;
+  int32 skipped_entries = 3;
 }
 
 message ScanRequest {
@@ -143,6 +161,7 @@ enum ECapability {
   E_CAPABILITY_REVEAL = 9;
   E_CAPABILITY_OCR = 10;
   E_CAPABILITY_EXPORT = 11;
+  E_CAPABILITY_UNPACK = 12;
 }
 
 // Unified reply: echoes the request id; fills the matching result on ok,
@@ -157,6 +176,7 @@ message Response {
     RenderResult render_result = 12;
     StatResult stat_result = 13;
     ExportResult export_result = 14;
+    UnpackResult unpack_result = 15;
   }
 }
 

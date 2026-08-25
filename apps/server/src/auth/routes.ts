@@ -31,7 +31,11 @@ async function issueTokens(
   user: User,
   deps: AuthDeps,
 ): Promise<{ accessToken: string; refreshToken: string }> {
-  const auth: AuthUser = { id: user.id, role: user.role, username: user.username };
+  const auth: AuthUser = {
+    id: user.id,
+    role: user.role,
+    username: user.username,
+  };
   const accessToken = await signAccessToken(
     auth,
     deps.jwtSecret,
@@ -101,9 +105,14 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps) {
     "/api/auth/refresh",
     async (request, reply) => {
       const { refreshToken } = request.body ?? {};
-      if (!refreshToken) return reply.code(400).send({ error: "refreshToken required" });
-      const rotated = await rotateSession(refreshToken, deps.config.refreshTtlSec);
-      if (!rotated) return reply.code(401).send({ error: "invalid refresh token" });
+      if (!refreshToken)
+        return reply.code(400).send({ error: "refreshToken required" });
+      const rotated = await rotateSession(
+        refreshToken,
+        deps.config.refreshTtlSec,
+      );
+      if (!rotated)
+        return reply.code(401).send({ error: "invalid refresh token" });
       const user = await findUserById(rotated.userId);
       if (!user || !user.enabled) {
         return reply.code(401).send({ error: "invalid refresh token" });
@@ -135,7 +144,9 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps) {
     },
   );
 
-  app.post<{ Body: { oldPassword?: string; newPassword?: string; refreshToken?: string } }>(
+  app.post<{
+    Body: { oldPassword?: string; newPassword?: string; refreshToken?: string };
+  }>(
     "/api/auth/password",
     { preHandler: authGuard({ jwtSecret: deps.jwtSecret }) },
     async (request, reply) => {

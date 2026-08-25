@@ -5,11 +5,19 @@ import { Asset, ContentUnit } from "../db/entities";
 
 export function registerAssetRoutes(app: FastifyInstance) {
   app.get<{
-    Querystring: { kind?: string; page?: string; pageSize?: string; status?: string };
+    Querystring: {
+      kind?: string;
+      page?: string;
+      pageSize?: string;
+      status?: string;
+    };
   }>("/api/assets", async (request) => {
     const { kind, status } = request.query;
     const page = Math.max(1, Number(request.query.page ?? 1) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(request.query.pageSize ?? 30) || 30));
+    const pageSize = Math.min(
+      100,
+      Math.max(1, Number(request.query.pageSize ?? 30) || 30),
+    );
     const repo = AppDataSource.getRepository(Asset);
     const where: Record<string, string> = {};
     if (kind) where.kind = kind;

@@ -1,5 +1,7 @@
 //! Protobuf serve mode: length-delimited WorkerFrame loop on stdio.
-//! stdout carries frames only; human logs go to stderr.
+//! Requests are processed sequentially (server-side concurrency is
+//! achieved by running a pool of worker processes — one worker stays
+//! single-threaded and deadlock-free). stdout carries frames only.
 
 use std::{
     collections::HashMap,
@@ -16,7 +18,7 @@ use crate::{
         ECapability, ErrorInfo, ReadyMessage, Request, Response, ScanResult, WorkerFrame,
         request::Body as ReqBody, response, worker_frame::Body,
     },
-    scan, tools,
+    scan, tools, unpack,
 };
 
 /// Hard frame cap: 32 MB.
@@ -68,14 +70,6 @@ fn write_frame(writer: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
     writer.flush()
 }
 
-fn emit(frame: WorkerFrame) -> io::Result<()> {
-    let mut bytes = Vec::new();
-    frame
-        .encode(&mut bytes)
-        .expect("encoding into a Vec never fails");
-    write_frame(&mut io::stdout().lock(), &bytes)
-}
-
 fn handle(req: Request) -> WorkerResult<response::Result> {
     match req.body {
         Some(ReqBody::Scan(r)) => {
@@ -85,6 +79,10 @@ fn handle(req: Request) -> WorkerResult<response::Result> {
         Some(ReqBody::Extract(r)) => {
             let result = extract::extract(&r)?;
             Ok(response::Result::ExtractResult(result))
+        }
+        Some(ReqBody::Unpack(r)) => {
+            let result = unpack::unpack(&r)?;
+            Ok(response::Result::UnpackResult(result))
         }
         Some(other) => Err(WorkerError::unsupported(format!(
             "{other:?} lands in a later milestone"
@@ -119,6 +117,14 @@ fn respond(req: Request) -> WorkerFrame {
     }
 }
 
+fn encode_frame(frame: WorkerFrame) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    frame
+        .encode(&mut bytes)
+        .expect("encoding into a Vec never fails");
+    bytes
+}
+
 /// Serve loop. Returns the process exit code.
 pub fn run() -> i32 {
     let tools: HashMap<String, String> = tools::probe_all().into_iter().collect();
@@ -128,20 +134,26 @@ pub fn run() -> i32 {
             ECapability::Scan as i32,
             ECapability::ExtractText as i32,
             ECapability::ExtractPdf as i32,
+            ECapability::Unpack as i32,
         ],
         tools,
     };
-    if let Err(e) = emit(WorkerFrame {
-        body: Some(Body::Ready(ready)),
-    }) {
-        eprintln!("[worker] handshake write failed: {e}");
-        return 101;
+    {
+        let mut out = io::stdout().lock();
+        if write_frame(&mut out, &encode_frame(WorkerFrame {
+            body: Some(Body::Ready(ready)),
+        }))
+        .is_err()
+        {
+            eprintln!("[worker] handshake write failed");
+            return 101;
+        }
     }
 
     loop {
         let bytes = match read_frame(&mut io::stdin().lock()) {
             Ok(bytes) => bytes,
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return 0,
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(e) => {
                 eprintln!("[worker] frame read failed: {e}");
                 return 101;
@@ -161,9 +173,13 @@ pub fn run() -> i32 {
             continue;
         };
 
-        if let Err(e) = emit(respond(req)) {
+        let out_frame = respond(req);
+        let mut out = io::stdout().lock();
+        if let Err(e) = write_frame(&mut out, &encode_frame(out_frame)) {
             eprintln!("[worker] frame write failed: {e}");
             return 101;
         }
     }
+
+    0
 }

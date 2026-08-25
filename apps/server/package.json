@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsup src/index.ts --format esm --target node24 --outDir dist",
+    "dev": "TSUP_WATCH=1 tsup --watch",
+    "build": "tsup",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.14.0",
+    "@fastify/multipart": "^10.1.1",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/websocket": "^11.1.0",
     "@mentro/protocol": "workspace:*",
@@ -28,8 +29,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.5.0",
     "@types/ws": "^8.18.1",
-    "tsup": "^8.5.0",
-    "tsx": "^4.20.0",
+    "tsup": "^8.5.1",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
   }

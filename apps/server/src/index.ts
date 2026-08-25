@@ -1,9 +1,14 @@
 import "reflect-metadata";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
 import { loadConfig, loadJwtSecret, lockDataDir } from "./config";
-import { AppDataSource, closeDataSource, initDataSource } from "./db/data-source";
+import {
+  AppDataSource,
+  closeDataSource,
+  initDataSource,
+} from "./db/data-source";
 import { Asset, Job } from "./db/entities";
 import { authGuard } from "./auth/guards";
 import { registerAuthRoutes } from "./auth/routes";
@@ -13,6 +18,8 @@ import { registerAssetRoutes } from "./routes/assets";
 import { registerSearchRoutes } from "./routes/search";
 import { registerJobRoutes } from "./routes/jobs";
 import { registerWs } from "./ws";
+import { ensurePoolSource, mountEnvSources } from "./pool";
+import { registerUploadRoutes } from "./routes/upload";
 import { initSegmenter } from "./search/segment";
 import { WorkerClient } from "./worker/client";
 import { Dispatcher } from "./queue/dispatcher";
@@ -58,6 +65,7 @@ async function main(): Promise<void> {
   const app = Fastify({ logger: false, bodyLimit: 4 * 1024 * 1024 });
   await app.register(rateLimit, { global: false });
   await app.register(websocket);
+  await app.register(multipart, { attachFieldsToBody: false });
 
   // Global auth: everything under /api/* except /api/auth/* and /api/ws.
   const guard = authGuard({ jwtSecret });
@@ -81,6 +89,16 @@ async function main(): Promise<void> {
   }));
 
   registerAuthRoutes(app, { config, jwtSecret });
+
+  // Asset pool: self-owned source under <data>/pool + MENTRO_SOURCES mounts.
+  const poolSourcePromise = ensurePoolSource(config.dataDir);
+  await poolSourcePromise;
+  await mountEnvSources(worker);
+  registerUploadRoutes(app, {
+    config,
+    worker,
+    poolSource: () => poolSourcePromise,
+  });
   registerAdminRoutes(app, { jwtSecret });
   registerSourceRoutes(app, { worker });
   registerAssetRoutes(app);

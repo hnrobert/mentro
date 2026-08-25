@@ -11,6 +11,7 @@ Mentro 是一个**自部署（self-hosted）的素材索引与检索服务**：�
 核心能力：
 
 - 服务端扫描指定根目录，blake3 内容哈希 + MIME 嗅探，增量重扫
+- **素材池（pool）双通道入料**：初始化挂载（`MENTRO_SOURCES` 启动自动注册）+ 浏览器上传（`POST /api/upload` → `data/pool/`）；上传的压缩包自动解包入池
 - 提取到内容单元粒度：`pdf → page`、`pptx → slide`、`video → 时间段`
 - **搜索在浏览器端完成**（索引 bundle 下发到各客户端本地检索，服务端零按键开销，天然适合多端）
 - 任意设备点击直达预览：pdf.js 跳页、视频跳时间点（HTTP Range 流式）、幻灯片缩略图
@@ -112,6 +113,9 @@ Files → scan(Rust) → assets 表 → job queue → extract(Rust+外部工具)
 | 中文分词       | **jieba-wasm**（server 端 FTS5 入库前预分词 + 浏览器 MiniSearch 索引/查询同一 wasm）                                                                                                                                                           | 两端分词口径一致，中文召回显著优于逐字 token；无原生依赖                                                                                           |
 | 扫描忽略       | 内置规则（`.git`、`node_modules`、隐藏目录、`data/`、`target/`、AppleDouble `._*`）+ 每源根 `.mentroignore`（gitignore 风格 glob）                                                                                                             | 内置保底常见噪声，per-source 应对杂目录                                                                                                            |
 | 大文件上限     | 可配置（默认 5 GB，`MENTRO_MAX_FILE_SIZE`）：超限只记 size/mtime，不哈希不提取，UI 标记 oversized                                                                                                                                              | 扫描可控；需要时调高即可                                                                                                                           |
+| 素材池         | **挂载 + 上传双通道**：`MENTRO_SOURCES`（逗号分隔）启动时幂等自动注册并扫描；`POST /api/upload`（multipart，JWT 鉴权）落盘 `data/pool/_uploads/<yyyy-mm>/`；`data/pool` 为自动创建的自建源                                                     | 部署态挂载卷即可入料；临时素材浏览器拖入即可                                                                                                       |
+| 压缩包处理     | 上传的压缩包**自动解包**入池：zip / tar / tar.gz / tar.bz2 / tar.xz（纯 Rust crate）、7z（sevenz-rust）、rar（外部 `7zz`/`unar`，capability 门控）；挂载源中的压缩包默认**不解包**（记为 archive 资产，后续可加 per-source 开关）              | 上传即入池零手工；不动用户磁盘上的包是安全默认                                                                                                     |
+| 解包安全       | zip-slip 防护（拒绝 `..`/绝对路径条目）、条目上限（默认 10k）、解压总量上限（默认 10 GiB）、跳过 `__MACOSX`/`._*`/`.DS_Store` 垃圾条目                                                                                                         | 解压炸弹与恶意归档的硬防线                                                                                                                         |
 | 部署形态       | docker compose：mentro（server + worker 同容器）+ gotenberg + paddle-ocr，`data/` 卷挂载                                                                                                                                                       | 一条命令拉起全家桶；TLS 不内建，跨网访问建议反代（Caddy / nginx）                                                                                  |
 
 ## 4. 仓库结构
@@ -175,6 +179,8 @@ data/                            # MENTRO_DATA 可覆盖；默认 dev 用 ./data
 ├── mentro.db                    # SQLite + TypeORM（WAL 模式）
 ├── thumbs/<assetId>/<unit>.webp # 内容单元缩略图
 ├── render/<assetId>.pdf         # Office → PDF 渲染缓存
+├── pool/                        # 素材池（自建源）：上传与解包产物
+│   └── _uploads/<yyyy-mm>/      # 原始上传文件（含未解包的压缩包）
 ├── office-fonts/                # 用户补充版权字体（进 office 容器：挂载或薄镜像，M3 验证）
 ├── containers/                  # 容器观察文件（§7.6）
 └── logs/                        # server 与 worker 每日滚动日志
@@ -375,6 +381,7 @@ message WorkerFrame {
     RevealRequest reveal = 8;       // path
     OcrRequest ocr = 9;             // assetId + contentHash + ordinal
     ExportRequest export = 10;      // units[]（assetId+ordinal 集合）+ format(pdf|pptx)；M6
+    UnpackRequest unpack = 12;      // path + dest_dir + 条目/体积上限（上传解包，§素材池）
     // worker → server 事件与应答
     ReadyMessage ready = 20;        // 协议版本 + capabilities + tools 探测
     Response response = 21;         // 回带请求 id；ok 时按请求类型回填 result，否则 error
@@ -389,6 +396,20 @@ message ErrorInfo {
   EErrorCode code = 1; // EErrorCode{ ErrorCodeToolMissing, ErrorCodeToolTimeout, ... }
   string message = 2;
   bool retryable = 3;  // 超时/工具崩溃可重试；格式损坏/不支持不可重试
+}
+
+// 上传压缩包解包（素材池）。安全：zip-slip 条目拒绝；条目数与解压总量上限。
+message UnpackRequest {
+  string path = 1;        // 压缩包路径
+  string dest_dir = 2;    // 解包目标（池内目录）
+  int32 max_entries = 3;  // 默认 10000
+  int64 max_bytes = 4;    // 默认 10 GiB
+}
+
+message UnpackResult {
+  repeated string file_paths = 1; // 相对 dest_dir
+  int64 total_bytes = 2;
+  int32 skipped_entries = 3;      // 垃圾条目（__MACOSX/._*）与超限条目
 }
 ```
 
@@ -409,11 +430,12 @@ message ErrorInfo {
 rust/crates/mentro-worker/
 ├── Cargo.toml
 └── src/
-    ├── main.rs            # clap 入口：serve / extract / scan / doctor
+    ├── main.rs            # clap 入口：serve / extract / scan / unpack / doctor
     ├── cli/               # args.rs（clap derive）、shell.rs（双流输出）
     ├── proto/             # prost 生成类型（build.rs 消费 descriptor.bin，缺失报清晰错误）
     ├── serve.rs           # stdio 事件循环：读长度分隔帧 → 分发 → 并发执行 → 写帧
     ├── scan.rs            # jwalk 并行遍历 + blake3 + infer 嗅探
+    ├── unpack.rs          # 压缩包解包：zip/tar 系（Rust crate）/7z（sevenz-rust）/rar（外部）
     ├── watch.rs           # notify 监听源目录 → fs 事件
     ├── reveal.rs          # Finder 定位等平台操作
     ├── ocr.rs             # PaddleOCR 容器生命周期 + HTTP 客户端（§7.6）
@@ -432,6 +454,7 @@ mentro-worker serve                          # protobuf 长驻模式（server sp
 mentro-worker extract <path> [--json]        # 单文件提取，结果 JSON 到 stdout
 mentro-worker scan <root> [--json]           # 扫描，输出文件记录流
 mentro-worker doctor                         # 探测外部工具、容器运行时与版本
+mentro-worker unpack <archive> -o <dir>      # 解包压缩包到目录（调试）
 mentro-worker ocr <image> [--json]           # 单图 OCR（调试容器链路）
 ```
 
@@ -515,19 +538,20 @@ docker run -d --name mentro-paddle-ocr \
 
 ## 8. 提取器矩阵
 
-| 格式                  | 文本提取                                             | 缩略图/渲染                    | 定位粒度     | 工具                     | 阶段 |
-| --------------------- | ---------------------------------------------------- | ------------------------------ | ------------ | ------------------------ | ---- |
-| txt / md / csv / json | Rust 原生                                            | 无                             | whole        | —                        | M1   |
-| pdf                   | `pdftotext`（`\f` 分页）                             | `pdftoppm`                     | page         | poppler                  | M1   |
-| pptx                  | OOXML：presentation.xml 定序 → slides/notes 的 `a:t` | Gotenberg(容器)→pdf→`pdftoppm` | slide        | 自研 + Gotenberg         | M3   |
-| docx                  | OOXML：`w:t` + 标题样式                              | Gotenberg(容器)→pdf            | page         | 自研 + Gotenberg         | M3   |
-| xlsx                  | sharedStrings + sheet 名                             | 无                             | sheet        | 自研                     | M3   |
-| png / jpg / webp      | EXIF（`kamadak-exif`）                               | `image` crate 缩放             | whole        | Rust 原生                | M4   |
-| mp4 / mov / mkv       | —（M6 转写）                                         | ffmpeg 抽帧（poster + 场景帧） | 时间段       | ffmpeg/ffprobe           | M4   |
-| mp3 / wav             | —（M6 转写）                                         | 无                             | 时间         | ffprobe                  | M4   |
-| heic                  | —                                                    | libheif                        | whole        | libheif                  | M5   |
-| epub / zip            | zip + html 文本                                      | 封面                           | chapter      | Rust crate               | M5   |
-| 扫描版 PDF / 图片 OCR | PaddleOCR 容器（PP-OCRv5，中英）                     | —                              | page / whole | docker + PaddleX serving | M5   |
+| 格式                            | 文本提取                                                                     | 缩略图/渲染                    | 定位粒度         | 工具                     | 阶段 |
+| ------------------------------- | ---------------------------------------------------------------------------- | ------------------------------ | ---------------- | ------------------------ | ---- |
+| txt / md / csv / json           | Rust 原生                                                                    | 无                             | whole            | —                        | M1   |
+| pdf                             | `pdftotext`（`\f` 分页）                                                     | `pdftoppm`                     | page             | poppler                  | M1   |
+| pptx                            | OOXML：presentation.xml 定序 → slides/notes 的 `a:t`                         | Gotenberg(容器)→pdf→`pdftoppm` | slide            | 自研 + Gotenberg         | M3   |
+| docx                            | OOXML：`w:t` + 标题样式                                                      | Gotenberg(容器)→pdf            | page             | 自研 + Gotenberg         | M3   |
+| xlsx                            | sharedStrings + sheet 名                                                     | 无                             | sheet            | 自研                     | M3   |
+| png / jpg / webp                | EXIF（`kamadak-exif`）                                                       | `image` crate 缩放             | whole            | Rust 原生                | M4   |
+| mp4 / mov / mkv                 | —（M6 转写）                                                                 | ffmpeg 抽帧（poster + 场景帧） | 时间段           | ffmpeg/ffprobe           | M4   |
+| mp3 / wav                       | —（M6 转写）                                                                 | 无                             | 时间             | ffprobe                  | M4   |
+| heic                            | —                                                                            | libheif                        | whole            | libheif                  | M5   |
+| epub / zip                      | zip + html 文本                                                              | 封面                           | chapter          | Rust crate               | M5   |
+| 上传压缩包（zip/tar 系/7z/rar） | 解包入池（§素材池）：zip/tar 纯 Rust，7z 用 sevenz-rust，rar 经 `7zz`/`unar` | —                              | 解包后按内容类型 | unpack 模块              | M2   |
+| 扫描版 PDF / 图片 OCR           | PaddleOCR 容器（PP-OCRv5，中英）                                             | —                              | page / whole     | docker + PaddleX serving | M5   |
 
 设计原则（沿用讨论结论）：**Rust owns the pipeline, not the formats**。每个提取器只输出统一的 Content Units；某工具渲染失真时换掉该提取器即可，不动核心。提取器带版本号（`extraction_version`），升级即全量重提取。
 
@@ -627,7 +651,7 @@ UI 文案中文优先；响应式布局——手机 / 平板浏览器可用（�
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
 | M0 脚手架                    | pnpm workspace、apps/server、apps/web、packages/protocol、proto/（buf + 双端 codegen）、rust workspace、规范文件（.editorconfig/.prettierrc/eslint.config.js 从技能 assets 拷贝）、CI 骨架 | `pnpm gen:proto` 双端生成物就绪；`pnpm dev` 同时起 server+web；`pnpm build:worker` 出二进制；CI 绿                                                                               | S    |
 | M1 用户+扫描+文本+服务端搜索 | 用户体系与 JWT（注册/登录/首个超管/注册开关/改密/管理端用户管理/会话吊销）、worker scan/stat/extract(text,pdf)+doctor；SQLite 迁移、job queue、FTS5；登录页 + 极简搜索页                   | 首位注册者成为 super_admin 并可关闭注册；第二用户受开关控制；管理员重置密码后旧会话全部失效；ref/ 全量扫描完成；71 个 PDF 文本可搜并定位到页；重扫跳过未变文件                   | L    |
-| M2 浏览器本地搜索+多端       | `/api/index` bundle、WS delta、MiniSearch、pdf.js 跳页预览、token 鉴权与非回环绑定                                                                                                         | 二次搜索本地 < 50 ms；文件变更增量生效；bundle gzip 后 < 20 MB；第二台设备经 LAN 全流程可用                                                                                      | M    |
+| M2 浏览器本地搜索+多端       | `/api/index` bundle、WS delta、MiniSearch、pdf.js 跳页预览、token 鉴权与非回环绑定、**素材池**（`MENTRO_SOURCES` 挂载 + `/api/upload` 上传 + 压缩包自动解包）                              | 二次搜索本地 < 50 ms；文件变更增量生效；bundle gzip 后 < 20 MB；第二台设备经 LAN 全流程可用；上传 zip → 自动解包 → 内容可搜                                                      | M    |
 | M3 Office                    | Gotenberg office 容器（现成镜像钉 tag）、pptx/docx/xlsx 文本（OOXML）、HTTP 渲染管线、页缩略图、懒渲染                                                                                     | 19 个 PPTX 每页可搜、可看缩略图；PDF 页数与幻灯片数一致性校验通过（隐藏页等错位 case 被识别）；无容器运行时降级为仅文本；容器无响应/崩溃不影响 worker 存活（回收重建）；熔断生效 | L    |
 | M4 媒体+增量监听             | 图片 EXIF+缩略图、ffprobe 元数据、视频海报帧+时间定位、notify 增量监听（worker `watch`）                                                                                                   | 58 PNG + 6 JPG 可搜可缩略；视频结果点击跳时间点；新增文件自动入索引                                                                                                              | M    |
 | M5 OCR + 补充格式            | PaddleOCR 容器（懒启动 + 生命周期管理 + 运行时探测）、heic、epub、docker compose 全家桶部署                                                                                                | 扫描版海报文字可搜（中英）；无容器运行时的环境优雅缺失并明示；容器崩溃/OCR 失败不阻塞管线；compose 一键拉起后全功能可用                                                          | L    |
@@ -651,6 +675,7 @@ transcribe(assetId) -> 带时间戳文本
 | ------------------------------------------ | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | LibreOffice 渲染失真（字体/SmartArt/公式） | 幻灯片预览与 PowerPoint 不一致 | 文本索引不依赖渲染；渲染失败降级为无缩略图；`<data>/office-fonts` 补版权字体（挂载或薄镜像）；macOS 可选 AppleScript 驱动 PowerPoint 导出作为替代渲染器（提取器可替换） |
 | Gotenberg 第三方依赖（API 与镜像更新）     | 升级后转换行为/字体变化        | 钉 tag，升级 = 显式决策 + ref/ 渲染回归；ext 层隔离使其整体可替换                                                                                                       |
+| 解压安全（zip-slip / 炸弹 / 恶意内容）     | 路径穿越写入、磁盘耗尽         | 条目路径规范化校验（拒绝 `..`/绝对路径）；条目数与总量上限；垃圾条目跳过；上传经 JWT 鉴权与 multipart 限额                                                              |
 | PDF 页 ↔ 幻灯片序号错位（隐藏页等）        | 页级缩略图/导出选错页          | 提取时校验 pdfinfo 页数 == 幻灯片数；不一致则标记映射可疑、禁用该 asset 的页级操作                                                                                      |
 | 网络暴露文件内容                           | 未授权访问泄露素材             | JWT 全端点鉴权；文件仅按 assetId 暴露、无路径参数；TLS 交反代；默认仍 127.0.0.1                                                                                         |
 | 认证安全（暴破 / 令牌泄露）                | 账户被入侵                     | argon2id；登录限速；access 1h + refresh 30 天轮换可吊销；重置密码即吊销全部会话；JWT 密钥生成于 `data/`（备份即迁移）                                                   |

@@ -30,35 +30,36 @@ export function registerAdminRoutes(
     };
   });
 
-  app.patch<{ Params: { id: string }; Body: { username?: string; enabled?: boolean } }>(
-    "/api/admin/users/:id",
-    guarded,
-    async (request, reply) => {
-      const repo = AppDataSource.getRepository(User);
-      const user = await repo.findOneBy({ id: request.params.id });
-      if (!user) return reply.code(404).send({ error: "not found" });
-      const { username, enabled } = request.body ?? {};
-      if (username !== undefined) {
-        if (!USERNAME_RE.test(username)) {
-          return reply.code(400).send({ error: "invalid username" });
-        }
-        if (username !== user.username && (await repo.findOneBy({ username }))) {
-          return reply.code(409).send({ error: "username taken" });
-        }
-        user.username = username;
+  app.patch<{
+    Params: { id: string };
+    Body: { username?: string; enabled?: boolean };
+  }>("/api/admin/users/:id", guarded, async (request, reply) => {
+    const repo = AppDataSource.getRepository(User);
+    const user = await repo.findOneBy({ id: request.params.id });
+    if (!user) return reply.code(404).send({ error: "not found" });
+    const { username, enabled } = request.body ?? {};
+    if (username !== undefined) {
+      if (!USERNAME_RE.test(username)) {
+        return reply.code(400).send({ error: "invalid username" });
       }
-      if (enabled !== undefined) {
-        // The super_admin account cannot be disabled.
-        if (user.role === "super_admin" && !enabled) {
-          return reply.code(400).send({ error: "cannot disable super_admin" });
-        }
-        user.enabled = enabled;
-        if (!enabled) await revokeAllSessions(user.id);
+      if (username !== user.username && (await repo.findOneBy({ username }))) {
+        return reply.code(409).send({ error: "username taken" });
       }
-      await repo.save(user);
-      return { user: { id: user.id, username: user.username, enabled: user.enabled } };
-    },
-  );
+      user.username = username;
+    }
+    if (enabled !== undefined) {
+      // The super_admin account cannot be disabled.
+      if (user.role === "super_admin" && !enabled) {
+        return reply.code(400).send({ error: "cannot disable super_admin" });
+      }
+      user.enabled = enabled;
+      if (!enabled) await revokeAllSessions(user.id);
+    }
+    await repo.save(user);
+    return {
+      user: { id: user.id, username: user.username, enabled: user.enabled },
+    };
+  });
 
   app.post<{ Params: { id: string }; Body: { newPassword?: string } }>(
     "/api/admin/users/:id/reset-password",

@@ -18,7 +18,11 @@ export class User {
   @Column({ type: "boolean", nullable: false, default: true })
   enabled!: boolean;
 
-  @Column({ name: "created_at", type: "datetime", default: () => "CURRENT_TIMESTAMP" })
+  @Column({
+    name: "created_at",
+    type: "datetime",
+    default: () => "CURRENT_TIMESTAMP",
+  })
   createdAt!: Date;
 
   @Column({ name: "last_login_at", type: "datetime", nullable: true })

@@ -94,7 +94,17 @@ pub fn scan_root(root: &Path) -> WorkerResult<Vec<CMsgFileRecord>> {
     let rules = IgnoreRules::load(root);
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
-    let walker = jwalk::WalkDir::new(&root).skip_hidden(true);
+    // Serial walk (walkdir): the hot cost is blake3 hashing, not traversal,
+    // and jwalk's shared rayon pool wedged under the threaded dispatcher
+    // (worker hung at 0% CPU with all requests stalled).
+    let walker = walkdir::WalkDir::new(&root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            !(e.depth() > 0
+                && (name.starts_with('.') || BUILTIN_IGNORED_DIRS.contains(&name.as_ref())))
+        });
 
     let mut records = Vec::new();
     for entry in walker {
@@ -102,24 +112,11 @@ pub fn scan_root(root: &Path) -> WorkerResult<Vec<CMsgFileRecord>> {
             Ok(e) => e,
             Err(_) => continue, // unreadable entries are skipped, not fatal
         };
-        let path: PathBuf = entry.path();
+        let path: PathBuf = entry.path().to_path_buf();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
         if !entry.file_type().is_file() {
-            if entry.file_type().is_dir() && BUILTIN_IGNORED_DIRS.contains(&name) {
-                // jwalk has no prune-on-visit; these dirs simply yield no
-                // wanted files, and their contents get filtered below.
-            }
-            continue;
-        }
-        if BUILTIN_IGNORED_DIRS.iter().any(|d| {
-            path.strip_prefix(&root)
-                .ok()
-                .and_then(|r| r.parent())
-                .map(|p| p.iter().any(|c| c == *d))
-                .unwrap_or(false)
-        }) {
             continue;
         }
         let relative = path

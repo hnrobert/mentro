@@ -1,9 +1,13 @@
 import { Column, Entity, Index, PrimaryColumn } from "typeorm";
 
 @Entity({ name: "content_units" })
-@Index("uq_content_units_asset_ordinal_type", ["assetId", "ordinal", "unitType"], {
-  unique: true,
-})
+@Index(
+  "uq_content_units_asset_ordinal_type",
+  ["assetId", "ordinal", "unitType"],
+  {
+    unique: true,
+  },
+)
 @Index("idx_content_units_asset", ["assetId"])
 export class ContentUnit {
   @PrimaryColumn({ type: "text", primaryKeyConstraintName: "pk_content_units" })

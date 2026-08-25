@@ -1,5 +1,6 @@
 import { ulid } from "ulid";
 import { AppDataSource } from "../db/data-source";
+import { serializedTx } from "../db/tx";
 import { Asset, ContentUnit, Job } from "../db/entities";
 import { ftsDeleteAsset, ftsReplaceUnits } from "../search/fts";
 import type { WorkerClient } from "../worker/client";
@@ -13,7 +14,7 @@ const UNIT_TYPE_BY_NUMBER = [
   "whole",
 ] as const;
 
-const MAX_IN_FLIGHT = 2;
+const MAX_IN_FLIGHT = Number(process.env.MENTRO_EXTRACT_CONCURRENCY ?? 4);
 const MAX_ATTEMPTS = 3;
 const TICK_MS = 500;
 
@@ -48,7 +49,10 @@ export class Dispatcher {
         order: { createdAt: "ASC" },
       });
       if (!job) return;
-      await jobRepo.update({ id: job.id }, { status: "running", updatedAt: new Date() });
+      await jobRepo.update(
+        { id: job.id },
+        { status: "running", updatedAt: new Date() },
+      );
       this.inFlight++;
       void this.run(job.id)
         .catch((err) => console.error("[queue] job crashed:", err))
@@ -86,7 +90,7 @@ export class Dispatcher {
           await this.finish(job.id, "pending", null, "stale result discarded");
           return;
         }
-        await this.persistUnits(asset.id, result);
+        await this.persistUnits(asset.id, asset.path, result);
         await assetRepo.update(
           { id: asset.id },
           {
@@ -105,7 +109,10 @@ export class Dispatcher {
       const retryable = error?.retryable === true && attempts < MAX_ATTEMPTS;
       await assetRepo.update(
         { id: asset.id },
-        { extractionStatus: retryable ? "pending" : "failed", error: error?.message ?? null },
+        {
+          extractionStatus: retryable ? "pending" : "failed",
+          error: error?.message ?? null,
+        },
       );
       await jobRepo.update(
         { id: job.id },
@@ -123,7 +130,10 @@ export class Dispatcher {
       const retryable = attempts < MAX_ATTEMPTS;
       await assetRepo.update(
         { id: asset.id },
-        { extractionStatus: retryable ? "pending" : "failed", error: String(err) },
+        {
+          extractionStatus: retryable ? "pending" : "failed",
+          error: String(err),
+        },
       );
       await jobRepo.update(
         { id: job.id },
@@ -140,25 +150,42 @@ export class Dispatcher {
 
   private async persistUnits(
     assetId: string,
-    result: { units: Array<{ ordinal: number; unitType: number; title: string; text: string; startMs: bigint | number; endMs: bigint | number; thumbPath: string }> },
+    assetPath: string,
+    result: {
+      units: Array<{
+        ordinal: number;
+        unitType: number;
+        title: string;
+        text: string;
+        startMs: bigint | number;
+        endMs: bigint | number;
+        thumbPath: string;
+      }>;
+    },
   ): Promise<void> {
-    const unitRepo = AppDataSource.getRepository(ContentUnit);
-    await ftsDeleteAsset(assetId);
-    await unitRepo.delete({ assetId });
-    const units = result.units.map((u) => ({
-      id: ulid(),
-      assetId,
-      ordinal: u.ordinal,
-      unitType: UNIT_TYPE_BY_NUMBER[u.unitType] ?? "whole",
-      title: u.title || null,
-      text: u.text || null,
-      startMs: Number(u.startMs) || null,
-      endMs: Number(u.endMs) || null,
-      thumbPath: u.thumbPath || null,
-      metaJson: null,
-    }));
-    await unitRepo.insert(units);
-    await ftsReplaceUnits(units);
+    // Units + FTS rows land in one transaction — the per-unit FTS
+    // roundtrips were the dominant cost of extraction commits. Serialized:
+    // one SQLite connection cannot host concurrent transactions.
+    return serializedTx(async (m) => {
+      const unitRepo = m.getRepository(ContentUnit);
+      await ftsDeleteAsset(assetId, m);
+      await unitRepo.delete({ assetId });
+      const units = result.units.map((u) => ({
+        id: ulid(),
+        assetId,
+        ordinal: u.ordinal,
+        unitType: UNIT_TYPE_BY_NUMBER[u.unitType] ?? "whole",
+        title: u.title || null,
+        text: u.text || null,
+        startMs: Number(u.startMs) || null,
+        endMs: Number(u.endMs) || null,
+        thumbPath: u.thumbPath || null,
+        metaJson: null,
+      }));
+      if (units.length > 0) await unitRepo.insert(units);
+      const fileName = assetPath.split("/").pop() ?? "";
+      await ftsReplaceUnits(units, fileName, m);
+    });
   }
 
   private async finish(
@@ -168,7 +195,10 @@ export class Dispatcher {
     error: string | null,
   ): Promise<void> {
     const jobRepo = AppDataSource.getRepository(Job);
-    await jobRepo.update({ id: jobId }, { status, errorCode, error, updatedAt: new Date() });
+    await jobRepo.update(
+      { id: jobId },
+      { status, errorCode, error, updatedAt: new Date() },
+    );
     const job = await jobRepo.findOneBy({ id: jobId });
     if (job) this.events.onJobUpdate?.(job);
   }

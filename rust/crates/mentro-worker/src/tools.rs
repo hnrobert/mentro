@@ -10,6 +10,8 @@ pub const PROBES: &[(&str, &str, &str)] = &[
     ("ffmpeg", "ffmpeg", "-version"),
     ("ffprobe", "ffprobe", "-version"),
     ("container.docker", "docker", "--version"),
+    ("archive.7zz", "7zz", "i"),
+    ("archive.unar", "unar", ""),
 ];
 
 pub fn probe_all() -> BTreeMap<String, String> {

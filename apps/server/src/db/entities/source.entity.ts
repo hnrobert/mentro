@@ -9,7 +9,11 @@ export class Source {
   @Column({ name: "root_path", type: "text", nullable: false })
   rootPath!: string;
 
-  @Column({ name: "added_at", type: "datetime", default: () => "CURRENT_TIMESTAMP" })
+  @Column({
+    name: "added_at",
+    type: "datetime",
+    default: () => "CURRENT_TIMESTAMP",
+  })
   addedAt!: Date;
 
   @Column({ name: "last_scan_at", type: "datetime", nullable: true })

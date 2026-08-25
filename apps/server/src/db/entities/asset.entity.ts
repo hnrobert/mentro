@@ -29,7 +29,12 @@ export class Asset {
   @Column({ type: "text", nullable: false })
   kind!: string; // 'text'|'pdf'|'presentation'|... (worker EAssetKind lowercase)
 
-  @Column({ name: "extraction_status", type: "text", nullable: false, default: "pending" })
+  @Column({
+    name: "extraction_status",
+    type: "text",
+    nullable: false,
+    default: "pending",
+  })
   extractionStatus!: string; // 'pending' | 'running' | 'done' | 'failed' | 'skipped'
 
   @Column({ name: "extraction_version", type: "integer", nullable: true })

@@ -8,7 +8,10 @@ export function registerSearchRoutes(app: FastifyInstance) {
     async (request) => {
       const q = (request.query.q ?? "").trim();
       if (!q) return { hits: [] };
-      const limit = Math.min(100, Math.max(1, Number(request.query.limit ?? 50) || 50));
+      const limit = Math.min(
+        100,
+        Math.max(1, Number(request.query.limit ?? 50) || 50),
+      );
       const hits = await ftsSearch(ftsMatchExpr(q), limit);
       return { hits };
     },

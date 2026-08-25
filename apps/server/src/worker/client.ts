@@ -119,11 +119,18 @@ export class WorkerClient {
               if (waiter) {
                 this.pending.delete(frame.body.value.id);
                 waiter.resolve(frame.body.value);
+              } else {
+                console.warn(
+                  `[worker] response with unknown id=${frame.body.value.id} (pending: ${[...this.pending.keys()].length})`,
+                );
               }
               break;
             }
             case "log":
-              this.events.onLog?.(frame.body.value.level, frame.body.value.message);
+              this.events.onLog?.(
+                frame.body.value.level,
+                frame.body.value.message,
+              );
               break;
             default:
               break; // progress/fs/ocrStatus arrive in later milestones
@@ -140,11 +147,15 @@ export class WorkerClient {
       child.stdout!.on("data", reader.push);
       child.stdout!.on("end", () => {
         this.failAll(new Error("worker stdout closed"));
-        settleReady(() => reject(new Error("worker stdout closed before handshake")));
+        settleReady(() =>
+          reject(new Error("worker stdout closed before handshake")),
+        );
       });
       child.on("exit", (code) => {
         this.failAll(new Error(`worker exited with code ${code}`));
-        settleReady(() => reject(new Error(`worker exited (${code}) before handshake`)));
+        settleReady(() =>
+          reject(new Error(`worker exited (${code}) before handshake`)),
+        );
       });
       child.on("error", (err) => {
         this.failAll(err);
@@ -196,6 +207,7 @@ export class WorkerClient {
         value: create(RequestSchema, { id, body }),
       },
     });
+    const payload = encodeFrame(frame);
     return new Promise<Response>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -211,7 +223,7 @@ export class WorkerClient {
           reject(e);
         },
       });
-      stdin.write(encodeFrame(frame), (err) => {
+      stdin.write(payload, (err) => {
         if (err) {
           this.pending.delete(id);
           clearTimeout(timer);

@@ -1,22 +1,20 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted } from "vue";
+import { useRouter } from "vue-router";
+import { useAuthStore } from "@/stores/auth";
 
-const status = ref<string>("connecting…");
+const auth = useAuthStore();
+const router = useRouter();
 
-onMounted(async () => {
-  try {
-    const res = await fetch("/api/status");
-    const body = (await res.json()) as { status: string };
-    status.value = `server ${body.status}`;
-  } catch {
-    status.value = "server unreachable";
-  }
+onMounted(() => {
+  void auth.restore();
+  window.addEventListener("mentro:unauthorized", () => {
+    auth.setUser(null);
+    router.push({ name: "login" });
+  });
 });
 </script>
 
 <template>
-  <main class="flex min-h-screen flex-col items-center justify-center gap-4">
-    <h1 class="text-4xl font-bold tracking-tight">Mentro</h1>
-    <p class="text-sm text-neutral-500">{{ status }}</p>
-  </main>
+  <RouterView />
 </template>

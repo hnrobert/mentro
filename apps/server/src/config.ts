@@ -20,6 +20,8 @@ export interface Config {
   accessTtlSec: number;
   /** Refresh token TTL in seconds (default 30d). */
   refreshTtlSec: number;
+  /** Per-file upload cap in bytes (default 1 GiB). */
+  maxUploadBytes: number;
 }
 
 export function loadConfig(): Config {
@@ -29,10 +31,12 @@ export function loadConfig(): Config {
     port: Number(process.env.MENTRO_PORT ?? 37797),
     bind: process.env.MENTRO_BIND ?? "127.0.0.1",
     workerBin: path.resolve(
-      process.env.MENTRO_WORKER_BIN ?? path.join(REPO_ROOT, "bin/mentro-worker"),
+      process.env.MENTRO_WORKER_BIN ??
+        path.join(REPO_ROOT, "bin/mentro-worker"),
     ),
     accessTtlSec: 60 * 60,
     refreshTtlSec: 30 * 24 * 60 * 60,
+    maxUploadBytes: Number(process.env.MENTRO_MAX_UPLOAD ?? 1024 * 1024 * 1024),
   };
 
   for (const dir of [

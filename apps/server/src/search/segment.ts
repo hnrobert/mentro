@@ -22,10 +22,14 @@ export async function initSegmenter(): Promise<void> {
     const api =
       mod.default && (mod.default.cut || mod.default.init) ? mod.default : mod;
     if (typeof api.init === "function") await api.init();
-    if (typeof api.cut !== "function") throw new Error("cut() not found on module");
+    if (typeof api.cut !== "function")
+      throw new Error("cut() not found on module");
     cutFn = (text: string) => api.cut!(text, true);
   } catch (err) {
-    console.warn("[search] jieba-wasm unavailable, falling back to identity:", err);
+    console.warn(
+      "[search] jieba-wasm unavailable, falling back to identity:",
+      err,
+    );
   }
 }
 

@@ -13,7 +13,11 @@ export class UserSession {
   @Column({ name: "refresh_hash", type: "text", nullable: false })
   refreshHash!: string; // sha256 of the refresh token
 
-  @Column({ name: "created_at", type: "datetime", default: () => "CURRENT_TIMESTAMP" })
+  @Column({
+    name: "created_at",
+    type: "datetime",
+    default: () => "CURRENT_TIMESTAMP",
+  })
   createdAt!: Date;
 
   @Column({ name: "expires_at", type: "datetime", nullable: false })

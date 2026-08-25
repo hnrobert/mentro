@@ -3,7 +3,8 @@ import { DataSource, type Logger } from "typeorm";
 import * as entities from "./entities";
 import { migrations } from "./migrations";
 
-const dbPath = process.env.MENTRO_DB ?? `${process.env.MENTRO_DATA ?? "./data"}/mentro.db`;
+const dbPath =
+  process.env.MENTRO_DB ?? `${process.env.MENTRO_DATA ?? "./data"}/mentro.db`;
 
 class QuietLogger implements Logger {
   logQuery(): void {}

@@ -21,7 +21,10 @@ export function registerSourceRoutes(
       sources: await Promise.all(
         sources.map(async (s) => {
           const total = await assetRepo.countBy({ sourceId: s.id });
-          const done = await assetRepo.countBy({ sourceId: s.id, extractionStatus: "done" });
+          const done = await assetRepo.countBy({
+            sourceId: s.id,
+            extractionStatus: "done",
+          });
           return { ...s, assetCount: total, doneCount: done };
         }),
       ),
@@ -81,8 +84,12 @@ export function registerSourceRoutes(
       });
       if (!source) return reply.code(404).send({ error: "not found" });
       void runSourceScan(source, deps.worker)
-        .then((outcome) => publish({ event: "scan.finished", sourceId: source.id, ...outcome }))
-        .catch((err) => console.error(`[scan] ${source.rootPath} failed:`, err));
+        .then((outcome) =>
+          publish({ event: "scan.finished", sourceId: source.id, ...outcome }),
+        )
+        .catch((err) =>
+          console.error(`[scan] ${source.rootPath} failed:`, err),
+        );
       return { ok: true };
     },
   );

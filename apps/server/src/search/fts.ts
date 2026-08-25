@@ -1,35 +1,48 @@
+import type { EntityManager } from "typeorm";
 import { AppDataSource } from "../db/data-source";
 import { ContentUnit } from "../db/entities";
 import { segment } from "./segment";
 
-/** Contentless FTS5 rows keyed by content_units.rowid; maintained
- * explicitly in the same transaction as the units themselves. */
+/** Query executor: the DataSource by default, or a transaction manager. */
+type Q = Pick<EntityManager, "query">;
 
-export async function ftsReplaceUnits(units: ContentUnit[]): Promise<void> {
+const defaultQ: Q = AppDataSource;
+
+/** FTS5 rows keyed by content_units.rowid; maintained explicitly — always
+ * within the same transaction as the unit writes they mirror. */
+
+export async function ftsReplaceUnits(
+  units: ContentUnit[],
+  fileName: string,
+  q: Q = defaultQ,
+): Promise<void> {
   if (units.length === 0) return;
-  const rows = await AppDataSource.query(
+  const rows = (await q.query(
     `SELECT id, rowid AS rid FROM content_units WHERE id IN (${units.map(() => "?").join(",")})`,
     units.map((u) => u.id),
-  ) as Array<{ id: string; rid: number }>;
+  )) as Array<{ id: string; rid: number }>;
   const rowidById = new Map(rows.map((r) => [r.id, r.rid]));
   for (const unit of units) {
     const rid = rowidById.get(unit.id);
     if (rid === undefined) continue;
-    await AppDataSource.query(`DELETE FROM units_fts WHERE rowid = ?`, [rid]);
-    await AppDataSource.query(
-      `INSERT INTO units_fts (rowid, title, text) VALUES (?, ?, ?)`,
-      [rid, segment(unit.title ?? ""), segment(unit.text ?? "")],
+    await q.query(`DELETE FROM units_fts WHERE rowid = ?`, [rid]);
+    await q.query(
+      `INSERT INTO units_fts (rowid, title, text, file_name) VALUES (?, ?, ?, ?)`,
+      [rid, segment(unit.title ?? ""), segment(unit.text ?? ""), fileName],
     );
   }
 }
 
-export async function ftsDeleteAsset(assetId: string): Promise<void> {
-  const rows = await AppDataSource.query(
+export async function ftsDeleteAsset(
+  assetId: string,
+  q: Q = defaultQ,
+): Promise<void> {
+  const rows = (await q.query(
     `SELECT rowid AS rid FROM content_units WHERE asset_id = ?`,
     [assetId],
-  ) as Array<{ rid: number }>;
+  )) as Array<{ rid: number }>;
   for (const { rid } of rows) {
-    await AppDataSource.query(`DELETE FROM units_fts WHERE rowid = ?`, [rid]);
+    await q.query(`DELETE FROM units_fts WHERE rowid = ?`, [rid]);
   }
 }
 
@@ -69,7 +82,10 @@ export async function ftsSearch(
     unitType: r.unit_type as string,
     title: (r.title as string) ?? null,
     snippet: (r.snip as string) ?? null,
-    fileName: String(r.asset_path ?? "").split("/").pop() ?? "",
+    fileName:
+      String(r.asset_path ?? "")
+        .split("/")
+        .pop() ?? "",
     assetPath: r.asset_path as string,
     kind: r.kind as string,
   }));

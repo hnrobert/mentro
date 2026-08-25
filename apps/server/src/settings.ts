@@ -21,7 +21,9 @@ export async function getSettings(): Promise<Settings> {
   return out;
 }
 
-export async function updateSettings(patch: Partial<Settings>): Promise<Settings> {
+export async function updateSettings(
+  patch: Partial<Settings>,
+): Promise<Settings> {
   const repo = AppDataSource.getRepository(Setting);
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;

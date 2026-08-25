@@ -7,6 +7,7 @@ mod scan;
 mod serve;
 mod shell;
 mod tools;
+mod unpack;
 
 use clap::{Parser, Subcommand};
 use shell::Shell;
@@ -53,6 +54,13 @@ enum Command {
     Scan { root: std::path::PathBuf },
     /// Probe external tools; JSON availability to stdout.
     Doctor,
+    /// Unpack an archive into a directory; JSON summary to stdout.
+    Unpack {
+        path: std::path::PathBuf,
+        /// Output directory (created if missing).
+        #[arg(short, long)]
+        out: std::path::PathBuf,
+    },
     /// OCR a single image; JSON result to stdout.
     Ocr { path: std::path::PathBuf },
 }
@@ -69,6 +77,7 @@ fn main() {
         Command::Doctor => doctor(&shell),
         Command::Scan { root } => scan_cli(&shell, &root),
         Command::Extract { path } => extract_cli(&shell, &path),
+        Command::Unpack { path, out } => unpack_cli(&shell, &path, &out),
         Command::Ocr { .. } => todo_later(&shell, "ocr", "M5"),
     };
     std::process::exit(code);
@@ -77,6 +86,34 @@ fn main() {
 fn todo_later(shell: &Shell, cmd: &str, milestone: &str) -> i32 {
     shell.warn(&format!("`{cmd}` lands in {milestone}"));
     EXIT_FAILURE
+}
+
+fn unpack_cli(shell: &Shell, path: &std::path::Path, out: &std::path::Path) -> i32 {
+    let req = proto::mentro::worker::v1::UnpackRequest {
+        path: path.to_string_lossy().to_string(),
+        dest_dir: out.to_string_lossy().to_string(),
+        max_entries: 0,
+        max_bytes: 0,
+    };
+    match unpack::unpack(&req) {
+        Ok(result) => {
+            shell.status(&format!(
+                "Unpacked {} file(s), {} skipped",
+                result.file_paths.len(),
+                result.skipped_entries
+            ));
+            shell.result(&serde_json::json!({
+                "files": result.file_paths,
+                "totalBytes": result.total_bytes,
+                "skippedEntries": result.skipped_entries,
+            }));
+            0
+        }
+        Err(e) => {
+            shell.warn(&format!("unpack failed: {e}"));
+            EXIT_FAILURE
+        }
+    }
 }
 
 fn doctor(shell: &Shell) -> i32 {

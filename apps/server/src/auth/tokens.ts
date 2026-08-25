@@ -57,7 +57,10 @@ export function newRefreshToken(): string {
 const sessionRepo = (): Repository<UserSession> =>
   AppDataSource.getRepository(UserSession);
 
-export async function createSession(userId: string, ttlSec: number): Promise<string> {
+export async function createSession(
+  userId: string,
+  ttlSec: number,
+): Promise<string> {
   const refresh = newRefreshToken();
   const expiresAt = new Date(Date.now() + ttlSec * 1000);
   await sessionRepo().insert({
