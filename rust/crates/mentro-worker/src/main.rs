@@ -1,8 +1,17 @@
+mod error;
+mod ext;
+mod extract;
+mod kind;
 mod proto;
+mod scan;
+mod serve;
 mod shell;
+mod tools;
 
 use clap::{Parser, Subcommand};
 use shell::Shell;
+
+use crate::proto::mentro::worker::v1::{CMsgContentUnit, CMsgFileRecord, EAssetKind};
 
 /// Exit codes: 0 ok, 1 usage error, 101 internal failure, 130 interrupted.
 const EXIT_FAILURE: i32 = 101;
@@ -17,7 +26,7 @@ struct Cli {
     #[arg(long, global = true, value_enum, default_value_t = ColorChoice::Auto)]
     color: ColorChoice,
 
-    #[arg(short = 'v', long, action = clap::ArgAction::Count, global = true)]
+    #[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
     verbose: u8,
 
     #[arg(short = 'q', long, global = true, conflicts_with = "verbose")]
@@ -40,7 +49,7 @@ enum Command {
     Serve,
     /// Extract a single file; JSON result to stdout.
     Extract { path: std::path::PathBuf },
-    /// Walk a root; JSON file records to stdout.
+    /// Walk a root; JSON file records to stdout (one per line).
     Scan { root: std::path::PathBuf },
     /// Probe external tools; JSON availability to stdout.
     Doctor,
@@ -56,57 +65,96 @@ fn main() {
     };
 
     let code = match cli.command {
+        Command::Serve => serve::run(),
         Command::Doctor => doctor(&shell),
-        Command::Serve => todo_m1(&shell, "serve"),
-        Command::Extract { .. } => todo_m1(&shell, "extract"),
-        Command::Scan { .. } => todo_m1(&shell, "scan"),
-        Command::Ocr { .. } => todo_m1(&shell, "ocr"),
+        Command::Scan { root } => scan_cli(&shell, &root),
+        Command::Extract { path } => extract_cli(&shell, &path),
+        Command::Ocr { .. } => todo_later(&shell, "ocr", "M5"),
     };
     std::process::exit(code);
 }
 
-fn todo_m1(shell: &Shell, cmd: &str) -> i32 {
-    shell.warn(&format!("`{cmd}` lands in M1 — not implemented yet"));
+fn todo_later(shell: &Shell, cmd: &str, milestone: &str) -> i32 {
+    shell.warn(&format!("`{cmd}` lands in {milestone}"));
     EXIT_FAILURE
 }
 
-/// Probe external tools with their version probes; report JSON to stdout.
 fn doctor(shell: &Shell) -> i32 {
     shell.status("Checking external tools");
-    let probes: &[(&str, &str, &str)] = &[
-        ("poppler.pdftotext", "pdftotext", "-v"),
-        ("poppler.pdftoppm", "pdftoppm", "-v"),
-        ("poppler.pdfinfo", "pdfinfo", "-v"),
-        ("ffmpeg", "ffmpeg", "-version"),
-        ("ffprobe", "ffprobe", "-version"),
-        ("container.docker", "docker", "--version"),
-    ];
-
-    let mut tools = serde_json::Map::new();
-    for (name, program, arg) in probes {
-        let value = match std::process::Command::new(program).arg(arg).output() {
-            Ok(out) => {
-                let text = String::from_utf8_lossy(if out.stdout.is_empty() {
-                    &out.stderr
-                } else {
-                    &out.stdout
-                });
-                let first_line = text.lines().next().unwrap_or_default().trim();
-                if out.status.success() || !first_line.is_empty() {
-                    first_line.to_string()
-                } else {
-                    "absent".to_string()
-                }
-            }
-            Err(_) => "absent".to_string(),
-        };
-        tools.insert((*name).to_string(), serde_json::Value::String(value));
-    }
-
-    let report = serde_json::json!({
-        "protocol": 1,
-        "tools": tools,
-    });
-    shell.result(&report);
+    let tools = tools::probe_all();
+    shell.result(&serde_json::json!({ "protocol": 1, "tools": tools }));
     0
+}
+
+fn record_json(record: &CMsgFileRecord) -> serde_json::Value {
+    let kind = EAssetKind::try_from(record.kind)
+        .map(|k| format!("{k:?}"))
+        .unwrap_or_else(|_| "Unspecified".to_string());
+    serde_json::json!({
+        "path": record.path,
+        "sizeBytes": record.size_bytes,
+        "mtimeMs": record.mtime_ms,
+        "mime": record.mime,
+        "kind": kind,
+        "oversized": record.oversized,
+        "contentHash": record.content_hash,
+    })
+}
+
+fn scan_cli(shell: &Shell, root: &std::path::Path) -> i32 {
+    match scan::scan_root(root) {
+        Ok(records) => {
+            shell.status(&format!("Scanned {} file(s)", records.len()));
+            for record in &records {
+                println!("{}", record_json(record));
+            }
+            0
+        }
+        Err(e) => {
+            shell.warn(&format!("scan failed: {e}"));
+            EXIT_FAILURE
+        }
+    }
+}
+
+fn unit_json(unit: &CMsgContentUnit) -> serde_json::Value {
+    serde_json::json!({
+        "ordinal": unit.ordinal,
+        "unitType": unit.unit_type,
+        "title": unit.title,
+        "text": unit.text,
+        "startMs": unit.start_ms,
+        "endMs": unit.end_ms,
+    })
+}
+
+fn extract_cli(shell: &Shell, path: &std::path::Path) -> i32 {
+    let mime = infer::get_from_path(path)
+        .ok()
+        .flatten()
+        .map(|t| t.mime_type().to_string());
+    let req = proto::mentro::worker::v1::ExtractRequest {
+        asset_id: String::new(),
+        path: path.to_string_lossy().to_string(),
+        content_hash: String::new(),
+        kind: kind::classify(mime.as_deref(), path) as i32,
+        want: Vec::new(),
+        options: None,
+    };
+    match extract::extract(&req) {
+        Ok(result) => {
+            shell.status(&format!("Extracted {} unit(s)", result.units.len()));
+            let units: Vec<_> = result.units.iter().map(unit_json).collect();
+            shell.result(&serde_json::json!({
+                "assetId": result.asset_id,
+                "contentHash": result.content_hash,
+                "units": units,
+            }));
+            0
+        }
+        Err(e) => {
+            shell.warn(&format!("extract failed: {e}"));
+            EXIT_FAILURE
+        }
+    }
 }

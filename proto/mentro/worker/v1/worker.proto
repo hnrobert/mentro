@@ -14,24 +14,32 @@ package mentro.worker.v1;
 
 message WorkerFrame {
   oneof body {
-    // server -> worker requests
-    ScanRequest scan = 1;
-    ExtractRequest extract = 2;
-    RenderRequest render = 3;
-    StatRequest stat = 4;
-    CancelRequest cancel = 5;
-    WatchRequest watch = 6;
-    UnwatchRequest unwatch = 7;
-    RevealRequest reveal = 8;
-    OcrRequest ocr = 9;
-    ExportRequest export = 10;
-    // worker -> server events and replies
+    // server -> worker
+    Request request = 1;
+    // worker -> server
     ReadyMessage ready = 20;
     Response response = 21;
     ProgressMessage progress = 22;
     LogMessage log = 23;
     FsMessage fs = 24;
     OcrStatusMessage ocr_status = 25;
+  }
+}
+
+// Server -> worker request envelope; `id` is echoed by Response.
+message Request {
+  string id = 1;
+  oneof body {
+    ScanRequest scan = 2;
+    ExtractRequest extract = 3;
+    RenderRequest render = 4;
+    StatRequest stat = 5;
+    CancelRequest cancel = 6;
+    WatchRequest watch = 7;
+    UnwatchRequest unwatch = 8;
+    RevealRequest reveal = 9;
+    OcrRequest ocr = 10;
+    ExportRequest export = 11;
   }
 }
 
@@ -183,6 +191,8 @@ message CMsgFileRecord {
   EAssetKind kind = 5;
   // beyond the configured max file size: recorded, never hashed/extracted
   bool oversized = 6;
+  // blake3 hex; empty for oversized files
+  string content_hash = 7;
 }
 
 enum EAssetKind {

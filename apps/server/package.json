@@ -11,12 +11,14 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "^2.14.0",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/websocket": "^11.1.0",
     "@mentro/protocol": "workspace:*",
     "argon2": "^0.44.0",
     "better-sqlite3": "^12.11.1",
     "fastify": "^5.6.0",
+    "jieba-wasm": "^2.4.0",
     "jose": "^6.1.0",
     "reflect-metadata": "^0.2.2",
     "typeorm": "^1.1.0",
@@ -25,6 +27,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.5.0",
+    "@types/ws": "^8.18.1",
     "tsup": "^8.5.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",

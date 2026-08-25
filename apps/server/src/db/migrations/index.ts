@@ -1,0 +1,7 @@
+import { FtsContentful1766000001000 } from "./1766000001000-FtsContentful";
+import { Init1766000000000 } from "./1766000000000-Init";
+
+// The DataSource option is cast at the consumption site (see data-source):
+// typeorm@1 expects `(string | Function)[]`, which migration classes
+// satisfy at runtime but not structurally.
+export const migrations = [Init1766000000000, FtsContentful1766000001000];
