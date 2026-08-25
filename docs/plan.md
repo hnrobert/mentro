@@ -37,7 +37,7 @@ Mentro 是一个**自部署（self-hosted）的素材索引与检索服务**：�
                               HTTP / WS
                     ┌───────────────▼────────────────┐
                     │        mentro-server           │
-                    │  Node 22 + TypeScript（纯协调）│
+                    │  Node 24 + TypeScript（纯协调）│
                     │  ├── REST API + WebSocket      │
                     │  ├── Sources / Job Queue       │
                     │  ├── SQLite + TypeORM          │
@@ -87,12 +87,13 @@ Files → scan(Rust) → assets 表 → job queue → extract(Rust+外部工具)
 | 决策点 | 选择 | 理由 |
 | --- | --- | --- |
 | 前端框架 | Vue 3 + Vite + TypeScript（SPA） | 纯本地工具，无 SEO 需求，不需要 Nuxt |
-| 前端状态 / UI | Pinia + Naive UI | Vue 3 原生、TS 友好 |
-| 后端运行时 | **Node.js 22 LTS + pnpm**（Robert 拍板，2026-08-25） | 符合个人 TS 规范；放弃 Bun 运行时，SQLite 走 better-sqlite3 |
+| 前端状态 / UI | Pinia + **shadcn-vue**（Reka UI + Tailwind CSS v4） | 组件源码拷入仓库、完全可改；Robert 拍板（2026-08-25，替代 Naive UI） |
+| 后端运行时 | **Node.js 24 LTS + pnpm**（`.nvmrc` + engines `24.x`；Robert 拍板 2026-08-25） | 符合个人 TS 规范；放弃 Bun 运行时，SQLite 走 better-sqlite3 |
 | 后端框架 | Fastify + @fastify/websocket | 轻量、TS 支持好、内建 schema 校验 |
 | 数据库 | SQLite + **TypeORM**（<typeorm@1.x>，better-sqlite3 驱动）+ FTS5 | 单文件、同步驱动适合本地服务；实体/迁移/DataSource 约定见 §5.2；FTS5 作服务端兜底搜索 |
 | 数据库迁移 | TypeORM 迁移：`<timestamp>-<PascalCase>.ts`、raw SQL、启动自动应用 | tsup 程序化脚本 `migration:generate/run/revert/check` 替代 typeorm CLI（其 TS loader 在 Node 24 下与 legacy decorators 不兼容） |
-| Worker 协议 | **Protobuf**（buf 管 .proto；Rust prost / TS `@bufbuild/protobuf`；stdio 长度分隔帧） | schema 单一权威，codegen 在构建期消灭两端漂移；调试走一次性 CLI 子命令的 JSON 输出 |
+| Worker 协议 | **Protobuf**（buf 管 .proto；Rust prost / TS `@bufbuild/protobuf`；stdio 长度分隔帧；消息命名按 proto 规范：`*Request/*Response` 封套、事件 `*Message`、`E` 前缀枚举） | schema 单一权威，codegen 在构建期消灭两端漂移；**生成物全部构建时产出、只提交 .proto**；调试走一次性 CLI 子命令的 JSON 输出 |
+| worker 二进制 | 约定 `bin/mentro-worker`（gitignore），`pnpm build:worker` 拷贝；`MENTRO_WORKER_BIN` 可覆盖 | dev / prod / compose 三态一致 |
 | Rust worker | Cargo workspace，protobuf over stdio 长驻进程，**全部第三方集成的唯一入口** | 单机父子进程，裸 protobuf 帧足够，无需 gRPC / SignalR；spawn 一次、常驻、零每次启动开销；Node 侧不直接调外部工具 |
 | 内容哈希 | blake3 | GB 级文件哈希速度远超 SHA-256，适合大语料 |
 | 文件类型检测 | 内容嗅探（`infer` crate）+ 扩展名兜底 | 不信任扩展名 |
@@ -107,7 +108,10 @@ Files → scan(Rust) → assets 表 → job queue → extract(Rust+外部工具)
 | 浏览器搜索 V1 | MiniSearch | 轻量、字段加权、fuzzy、prefix；FlexSearch 类型质量差 |
 | 浏览器搜索升级 | SQLite WASM FTS5 或 tantivy-wasm | 触发条件见 §9 |
 | 包管理 | pnpm（workspace monorepo），`packageManager` 钉版本 | 个人 TS 规范 |
-| 网络与鉴权 | **JWT（HMAC-SHA256）+ 刷新会话**：登录发短时 access token + 可吊销 refresh（DB 会话表，每次刷新轮换）；HTTP `Authorization: Bearer`，WS `?token=`；密码 bcrypt（cost 12）；登录限速 | 多端各自登录持有令牌；管理员重置密码即吊销该用户全部会话；文件仅按 assetId 暴露、不接受路径参数（防穿越）；JWT 密钥首次启动生成于 `data/` |
+| 网络与鉴权 | **JWT（HMAC-SHA256）+ 刷新会话**：登录发 access（1h）+ 可吊销 refresh（30 天，DB 会话表，每次刷新轮换）；HTTP `Authorization: Bearer`，WS `?token=`；密码 **argon2id**；登录限速；默认绑 127.0.0.1:37797（`MENTRO_PORT`/`MENTRO_BIND` 可覆盖） | 多端各自登录持有令牌；管理员重置密码即吊销该用户全部会话；文件仅按 assetId 暴露、不接受路径参数（防穿越）；JWT 密钥首次启动生成于 `data/` |
+| 中文分词 | **jieba-wasm**（server 端 FTS5 入库前预分词 + 浏览器 MiniSearch 索引/查询同一 wasm） | 两端分词口径一致，中文召回显著优于逐字 token；无原生依赖 |
+| 扫描忽略 | 内置规则（`.git`、`node_modules`、隐藏目录、`data/`、`target/`、AppleDouble `._*`）+ 每源根 `.mentroignore`（gitignore 风格 glob） | 内置保底常见噪声，per-source 应对杂目录 |
+| 大文件上限 | 可配置（默认 5 GB，`MENTRO_MAX_FILE_SIZE`）：超限只记 size/mtime，不哈希不提取，UI 标记 oversized | 扫描可控；需要时调高即可 |
 | 部署形态 | docker compose：mentro（server + worker 同容器）+ gotenberg + paddle-ocr，`data/` 卷挂载 | 一条命令拉起全家桶；TLS 不内建，跨网访问建议反代（Caddy / nginx） |
 
 ## 4. 仓库结构
@@ -115,7 +119,7 @@ Files → scan(Rust) → assets 表 → job queue → extract(Rust+外部工具)
 ```bash
 mentro/
 ├── apps/
-│   ├── server/                  # Node 22 + Fastify + TypeORM
+│   ├── server/                  # Node 24 + Fastify + TypeORM
 │   │   ├── src/
 │   │   │   ├── index.ts         # 入口：启动、data 目录锁、spawn worker
 │   │   │   ├── db/
@@ -138,12 +142,13 @@ mentro/
 │       │   ├── api/             # REST/WS 客户端 + zod 校验
 │       │   └── stores/          # Pinia
 │       └── package.json
-├── proto/                       # buf 管理的 worker 协议 .proto（唯一权威）
+├── proto/                       # buf 管理的 worker 协议 .proto（唯一权威，唯一提交物）
+├── bin/                         # mentro-worker 二进制（gitignore，pnpm build:worker 拷入）
 ├── packages/
-│   └── protocol/                # HTTP/WS zod schema + buf 生成的 TS 协议类型
-│       ├── src/schemas/*.ts     # REST/WS DTO 校验（手写 zod）
-│       ├── gen/                 # buf generate 产物（@bufbuild/protobuf，提交入库）
-│       └── descriptor.bin       # 供 cargo build.rs 消费（pnpm gen:proto 产出）
+│   └── protocol/                # HTTP/WS zod schema + 生成的 TS 协议类型
+│       ├── src/schemas/*.ts     # REST/WS DTO 校验（手写 zod，单一来源）
+│       ├── gen/                 # buf generate 产物（构建时生成，gitignore）
+│       └── descriptor.bin       # 供 cargo build.rs 消费（构建时生成，gitignore）
 ├── rust/
 │   ├── Cargo.toml               # workspace（resolver = "3"）
 │   ├── rust-toolchain.toml
@@ -281,7 +286,7 @@ export class ContentUnit {
 
 其余各表同风格：`sources`（id、rootPath 唯一、addedAt、lastScanAt）、`jobs`（id、assetId、kind、status、attempts 默认 0、errorCode、error、createdAt、updatedAt）、`index_state`（key 主键、value——存 index_version 等）。认证三表：
 
-- `users`：id、`username` 唯一（`/^[A-Za-z0-9_-]{3,32}$/`）、`password_hash`（bcrypt cost 12，只存哈希、日志零出现）、`role`（`'super_admin' | 'user'`——首个注册者即 super_admin）、`enabled`（默认 true）、`created_at`、`last_login_at`
+- `users`：id、`username` 唯一（`/^[A-Za-z0-9_-]{3,32}$/`）、`password_hash`（argon2id，只存哈希、日志零出现）、`role`（`'super_admin' | 'user'`——首个注册者即 super_admin）、`enabled`（默认 true）、`created_at`、`last_login_at`
 - `user_sessions`：id、`user_id`、`refresh_hash`（refresh token 只存哈希）、`created_at`、`expires_at`、`revoked_at`——多端会话可见、可吊销；刷新即轮换（旧 token 作废）
 - `settings`：key 主键、value——`allowRegistration`（默认 true）等运行时开关
 
@@ -337,7 +342,7 @@ mentro://<assetId>/sheet/2
 | POST | `/api/export` | 选单元集合 + 目标格式 → 导出 job（M6；PDF 切割合并 / PPTX OOXML 手术） |
 | GET | `/api/admin/users` | 用户列表（super_admin） |
 | PATCH | `/api/admin/users/:id` | 修改用户名 / 启用禁用（super_admin 不可被禁用） |
-| POST | `/api/admin/users/:id/reset-password` | 管理员重置密码：返回一次性新密码，并吊销该用户全部会话 |
+| POST | `/api/admin/users/:id/reset-password` | 管理员直接设定新密码，并吊销该用户全部会话 |
 | DELETE | `/api/admin/users/:id` | 删除用户（不可删自己；连带吊销会话） |
 | GET/PATCH | `/api/admin/settings` | 读取/设置 `allowRegistration` 等（super_admin） |
 
@@ -354,7 +359,7 @@ mentro://<assetId>/sheet/2
 
 ### 6.3 Worker Protobuf 协议（stdio）
 
-worker 协议由 `proto/` 下 buf 管理的 `.proto` 唯一权威定义，两端 codegen：Rust 走 prost（`build.rs` 消费 `pnpm gen:proto` 产出的 `descriptor.bin`，缺失时报清晰错误），TS 走 `@bufbuild/protobuf`（生成物进 `packages/protocol/gen/`，提交入库）。传输为 stdio 上的**长度分隔帧**（varint 长度前缀 + 消息体，帧上限 32 MB），单一 envelope `WorkerFrame` 作唯一解码点：
+worker 协议由 `proto/mentro/worker/v1/worker.proto`（`package mentro.worker.v1`）唯一权威定义，**生成物全部构建时产出**：`pnpm gen:proto` 一次重生成所有消费端（TS → `packages/protocol/gen/`，descriptor.bin → 供 cargo `build.rs`，均 gitignore）。消息命名按 proto 规范：请求/应答 `*Request`/`*Response`、推送事件 `*Message`、可复用负载 `CMsg*`、枚举 `E` 前缀自限定成员。传输为 stdio 上的**长度分隔帧**（varint 长度前缀 + 消息体，帧上限 32 MB），单一 envelope `WorkerFrame` 作唯一解码点：
 
 ```protobuf
 message WorkerFrame {
@@ -371,19 +376,19 @@ message WorkerFrame {
     OcrRequest ocr = 9;             // assetId + contentHash + ordinal
     ExportRequest export = 10;      // units[]（assetId+ordinal 集合）+ format(pdf|pptx)；M6
     // worker → server 事件与应答
-    ReadyEvent ready = 20;          // 协议版本 + capabilities + tools 探测
+    ReadyMessage ready = 20;        // 协议版本 + capabilities + tools 探测
     Response response = 21;         // 回带请求 id；ok 时按请求类型回填 result，否则 error
-    ProgressEvent progress = 22;    // id + done/total + unit
-    LogEvent log = 23;              // level + message
-    FsEvent fs = 24;                // sourceId + path + kind
-    OcrStatusEvent ocr_status = 25; // state + detail
+    ProgressMessage progress = 22;  // id + done/total + unit
+    LogMessage log = 23;            // level + message
+    FsMessage fs = 24;              // sourceId + path + kind
+    OcrStatusMessage ocr_status = 25; // state + detail
   }
 }
 
 message ErrorInfo {
-  ErrorCode code = 1; // TOOL_MISSING / TOOL_TIMEOUT / TOOL_NON_ZERO_EXIT / ... 枚举
+  EErrorCode code = 1; // EErrorCode{ ErrorCodeToolMissing, ErrorCodeToolTimeout, ... }
   string message = 2;
-  bool retryable = 3; // 超时/工具崩溃可重试；格式损坏/不支持不可重试
+  bool retryable = 3;  // 超时/工具崩溃可重试；格式损坏/不支持不可重试
 }
 ```
 
@@ -526,7 +531,7 @@ docker run -d --name mentro-paddle-ocr \
 
 设计原则（沿用讨论结论）：**Rust owns the pipeline, not the formats**。每个提取器只输出统一的 Content Units；某工具渲染失真时换掉该提取器即可，不动核心。提取器带版本号（`extraction_version`），升级即全量重提取。
 
-缩略图策略：扫描期只出 cover（第 1 页/幻灯片/海报帧），其余页懒渲染（`POST /api/render/...` 触发），保证大语料首扫速度。
+缩略图策略：扫描期只出 cover（第 1 页/幻灯片/海报帧），其余页懒渲染（`POST /api/render/...` 触发），保证大语料首扫速度；默认规格 webp 宽 480px、质量 75。
 
 **为什么 Office 渲染要经 PDF 中转**：LibreOffice/Gotenberg 没有可靠的逐页图像导出（图像过滤器只出第一页），PDF 是其唯一的一等全量导出格式；且 `render/<assetId>.pdf` 这一份缓存同时服务三个消费者——懒渲染缩略图（pdftoppm 按需出任意页任意分辨率）、pdf.js 浏览器跳页预览、M6 选页导出（直接切割合并，零再转换）。
 
@@ -558,7 +563,7 @@ docker run -d --name mentro-paddle-ocr \
 }
 ```
 
-- 字段：`title^3, fileName^2, text`；fuzzy 0.2、prefix、AND 语义
+- 字段：`title^3, fileName^2, text`；fuzzy 0.2、prefix、AND 语义；中文经 jieba-wasm 分词后入索引/查询（与 FTS5 同源）
 - 过滤（kind / source / 时间）在结果后置过滤（V1 数据量下足够快）
 - bundle 存内存 + localStorage 记版本号；WS `index.delta` 增量合并
 - 多端各拉一份 bundle（gzip + ETag 协商缓存）；移动端对体积敏感，§9.2 触发线同样适用
@@ -611,7 +616,7 @@ UI 文案中文优先；响应式布局——手机 / 平板浏览器可用（�
 
 ### 11.4 CI 与规范
 
-- CI（GitHub Actions）：lint（prettier --check、eslint、cargo fmt --check、clippy -D warnings、pnpm migration:check、pnpm gen:proto 幂等检查——生成物与 .proto 必须同步）+ 单测矩阵（macOS / Ubuntu）；外部工具 e2e 单独 job（apt 安装 poppler/libreoffice/ffmpeg）。写 workflow 时按 hnrobert-github-actions 规范执行
+- CI（GitHub Actions，公开仓库 mentro，仅 ubuntu runner）：lint（prettier --check、eslint、cargo fmt --check、clippy -D warnings、pnpm migration:check）+ proto 门禁（`buf lint`、`buf breaking --against '.git#branch=main'`，checkout 需 fetch-depth: 0）+ 单测与构建；外部工具 e2e 单独 job（apt 安装 poppler/ffmpeg）；darwin 编译由本机验证。写 workflow 时按 hnrobert-github-actions 规范执行
 - 迁移守卫：husky + lint-staged 跑 `pnpm migration:check`——staged 实体改动未附带新登记的迁移则拦截提交
 - 代码规范：TS 按 hnrobert-typescript（Prettier 2-space/printWidth 80、eslint flat config、pnpm 钉 `packageManager`）；Markdown/YAML/JSON 按 hnrobert-docs-style；Rust 用 rustfmt 默认 + clippy
 - 提交信息 Conventional Commits（hnrobert-commit-message）；git 操作遵循 hnrobert-git-safety
@@ -648,11 +653,11 @@ transcribe(assetId) -> 带时间戳文本
 | Gotenberg 第三方依赖（API 与镜像更新） | 升级后转换行为/字体变化 | 钉 tag，升级 = 显式决策 + ref/ 渲染回归；ext 层隔离使其整体可替换 |
 | PDF 页 ↔ 幻灯片序号错位（隐藏页等） | 页级缩略图/导出选错页 | 提取时校验 pdfinfo 页数 == 幻灯片数；不一致则标记映射可疑、禁用该 asset 的页级操作 |
 | 网络暴露文件内容 | 未授权访问泄露素材 | JWT 全端点鉴权；文件仅按 assetId 暴露、无路径参数；TLS 交反代；默认仍 127.0.0.1 |
-| 认证安全（暴破 / 令牌泄露） | 账户被入侵 | bcrypt cost 12；登录限速；access 短时 + refresh 轮换可吊销；重置密码即吊销全部会话；JWT 密钥生成于 `data/`（备份即迁移） |
+| 认证安全（暴破 / 令牌泄露） | 账户被入侵 | argon2id；登录限速；access 1h + refresh 30 天轮换可吊销；重置密码即吊销全部会话；JWT 密钥生成于 `data/`（备份即迁移） |
 | soffice 启动慢、profile 锁 | 批量首转慢 | 独立 UserInstallation、全局串行、首批预热一个实例常驻评估 |
 | 扫描版 PDF 无文本 | 搜不到 | V1 标记 no-text 不阻塞；M5 OCR 补齐 |
 | 巨文件哈希/提取耗时 | 扫描与队列堵塞 | blake3（GB/s 级）；mtime+size 预筛；job 超时 + 熔断 |
-| better-sqlite3 原生模块 | Node 版本升级需重编 | engines 钉 Node 22；CI 矩阵覆盖 darwin/ubuntu |
+| better-sqlite3 / argon2 原生模块 | Node 版本升级需重编 | engines 钉 Node 24；CI 覆盖 ubuntu，darwin 本机验证 |
 | TypeORM 1.x 主线较新 | API / 文档滞后 | 钉住小版本，升级经迁移 selftest 验证；每列显式 type 降低对 emitDecoratorMetadata 的依赖 |
 | ref/ 语料不可入库 | CI 无法用真实语料 | ref/ 已 gitignore；CI 用 testdata/ 合成夹具；corpus 测试仅本地 |
 | MiniSearch 规模上限 | 搜索变慢/内存涨 | §9.2 明确触发线与两条升级路径 |
