@@ -1,0 +1,25 @@
+{
+  "name": "mentro",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.23.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "gen:proto": "cd proto && buf generate --template buf.gen.ts.yaml && buf build -o ../packages/protocol/descriptor.bin",
+    "build:worker": "cargo build --release --manifest-path rust/Cargo.toml && mkdir -p bin && cp rust/target/release/mentro-worker bin/",
+    "dev": "pnpm -r --parallel --stream dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint && pnpm exec prettier --check .",
+    "format": "pnpm exec prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "eslint": "^9.39.2",
+    "prettier": "^3.6.2",
+    "typescript-eslint": "^8.46.2"
+  }
+}

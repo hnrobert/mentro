@@ -1,0 +1,10 @@
+# TypeScript codegen (protobuf-es). Outputs are build-time generated and
+# gitignored; `pnpm gen:proto` regenerates every consumer from one command.
+version: v2
+managed:
+  enabled: true
+plugins:
+  - remote: buf.build/bufbuild/es
+    out: ../packages/protocol/gen
+    opt:
+      - target=ts

@@ -1,0 +1,293 @@
+// Mentro worker protocol (v1).
+//
+// Transport: length-delimited protobuf frames over the worker's stdio
+// (varint length prefix + message body). WorkerFrame is the single
+// envelope — decode it, switch on `body`.
+//
+// Naming: request/response envelopes are *Request/*Response, push events
+// are *Message, reusable payloads are CMsg*, enums are E-prefixed with
+// self-qualified members.
+
+syntax = "proto3";
+
+package mentro.worker.v1;
+
+message WorkerFrame {
+  oneof body {
+    // server -> worker requests
+    ScanRequest scan = 1;
+    ExtractRequest extract = 2;
+    RenderRequest render = 3;
+    StatRequest stat = 4;
+    CancelRequest cancel = 5;
+    WatchRequest watch = 6;
+    UnwatchRequest unwatch = 7;
+    RevealRequest reveal = 8;
+    OcrRequest ocr = 9;
+    ExportRequest export = 10;
+    // worker -> server events and replies
+    ReadyMessage ready = 20;
+    Response response = 21;
+    ProgressMessage progress = 22;
+    LogMessage log = 23;
+    FsMessage fs = 24;
+    OcrStatusMessage ocr_status = 25;
+  }
+}
+
+message ScanRequest {
+  string root = 1;
+}
+
+message ExtractRequest {
+  string asset_id = 1;
+  string path = 2;
+  // fencing: the response is discarded if the file's hash changed meanwhile
+  string content_hash = 3;
+  EAssetKind kind = 4;
+  repeated EExtractWant want = 5;
+  ExtractOptions options = 6;
+}
+
+message ExtractOptions {
+  int32 thumb_width = 1; // px, default 480
+}
+
+enum EExtractWant {
+  E_EXTRACT_WANT_UNSPECIFIED = 0;
+  E_EXTRACT_WANT_TEXT = 1;
+  E_EXTRACT_WANT_COVER_THUMB = 2;
+}
+
+message RenderRequest {
+  string asset_id = 1;
+  string content_hash = 2;
+  int32 ordinal = 3;
+  ERenderWant want = 4;
+}
+
+enum ERenderWant {
+  E_RENDER_WANT_UNSPECIFIED = 0;
+  E_RENDER_WANT_THUMB = 1;
+  E_RENDER_WANT_FULL = 2;
+}
+
+message StatRequest {
+  repeated string paths = 1;
+}
+
+message CancelRequest {
+  string job_id = 1;
+}
+
+message WatchRequest {
+  string source_id = 1;
+  string root = 2;
+}
+
+message UnwatchRequest {
+  string source_id = 1;
+}
+
+message RevealRequest {
+  string path = 1;
+}
+
+message OcrRequest {
+  string asset_id = 1;
+  string content_hash = 2;
+  int32 ordinal = 3;
+}
+
+message ExportRequest {
+  repeated CMsgUnitRef units = 1;
+  EExportFormat format = 2;
+}
+
+message CMsgUnitRef {
+  string asset_id = 1;
+  int32 ordinal = 2;
+}
+
+enum EExportFormat {
+  E_EXPORT_FORMAT_UNSPECIFIED = 0;
+  E_EXPORT_FORMAT_PDF = 1;
+  E_EXPORT_FORMAT_PPTX = 2;
+}
+
+// Sent by the worker right after process start.
+message ReadyMessage {
+  int32 protocol = 1;
+  repeated ECapability capabilities = 2;
+  map<string, string> tools = 3; // tool name -> version or "absent"
+}
+
+enum ECapability {
+  E_CAPABILITY_UNSPECIFIED = 0;
+  E_CAPABILITY_SCAN = 1;
+  E_CAPABILITY_WATCH = 2;
+  E_CAPABILITY_EXTRACT_TEXT = 3;
+  E_CAPABILITY_EXTRACT_PDF = 4;
+  E_CAPABILITY_EXTRACT_OFFICE = 5;
+  E_CAPABILITY_EXTRACT_IMAGE = 6;
+  E_CAPABILITY_EXTRACT_MEDIA = 7;
+  E_CAPABILITY_RENDER = 8;
+  E_CAPABILITY_REVEAL = 9;
+  E_CAPABILITY_OCR = 10;
+  E_CAPABILITY_EXPORT = 11;
+}
+
+// Unified reply: echoes the request id; fills the matching result on ok,
+// otherwise error.
+message Response {
+  string id = 1;
+  bool ok = 2;
+  ErrorInfo error = 3;
+  oneof result {
+    ScanResult scan_result = 10;
+    ExtractResult extract_result = 11;
+    RenderResult render_result = 12;
+    StatResult stat_result = 13;
+    ExportResult export_result = 14;
+  }
+}
+
+message ErrorInfo {
+  EErrorCode code = 1;
+  string message = 2;
+  // true: timeout/tool crash (worth retrying); false: corrupt/unsupported.
+  bool retryable = 3;
+}
+
+enum EErrorCode {
+  E_ERROR_CODE_UNSPECIFIED = 0;
+  E_ERROR_CODE_TOOL_MISSING = 1;
+  E_ERROR_CODE_TOOL_TIMEOUT = 2;
+  E_ERROR_CODE_TOOL_NON_ZERO_EXIT = 3;
+  E_ERROR_CODE_OUTPUT_TOO_LARGE = 4;
+  E_ERROR_CODE_CANCELLED = 5;
+  E_ERROR_CODE_UNSUPPORTED = 6;
+  E_ERROR_CODE_INVALID_INPUT = 7;
+  E_ERROR_CODE_INTERNAL = 8;
+}
+
+message ScanResult {
+  repeated CMsgFileRecord records = 1;
+}
+
+message CMsgFileRecord {
+  string path = 1;
+  int64 size_bytes = 2;
+  int64 mtime_ms = 3;
+  string mime = 4;
+  EAssetKind kind = 5;
+  // beyond the configured max file size: recorded, never hashed/extracted
+  bool oversized = 6;
+}
+
+enum EAssetKind {
+  E_ASSET_KIND_UNSPECIFIED = 0;
+  E_ASSET_KIND_TEXT = 1;
+  E_ASSET_KIND_PDF = 2;
+  E_ASSET_KIND_PRESENTATION = 3;
+  E_ASSET_KIND_DOCUMENT = 4;
+  E_ASSET_KIND_SPREADSHEET = 5;
+  E_ASSET_KIND_IMAGE = 6;
+  E_ASSET_KIND_VIDEO = 7;
+  E_ASSET_KIND_AUDIO = 8;
+  E_ASSET_KIND_ARCHIVE = 9;
+  E_ASSET_KIND_OTHER = 10;
+}
+
+message ExtractResult {
+  string asset_id = 1;
+  string content_hash = 2;
+  EAssetKind kind = 3;
+  repeated CMsgContentUnit units = 4;
+  repeated string thumbs = 5; // paths relative to the data dir
+}
+
+message CMsgContentUnit {
+  int32 ordinal = 1; // 1-based page/slide/sheet index; 1 for whole-file
+  EUnitType unit_type = 2;
+  string title = 3;
+  string text = 4;
+  int64 start_ms = 5; // av positioning
+  int64 end_ms = 6;
+  string thumb_path = 7;
+}
+
+enum EUnitType {
+  E_UNIT_TYPE_UNSPECIFIED = 0;
+  E_UNIT_TYPE_PAGE = 1;
+  E_UNIT_TYPE_SLIDE = 2;
+  E_UNIT_TYPE_SHEET = 3;
+  E_UNIT_TYPE_FRAME = 4;
+  E_UNIT_TYPE_WHOLE = 5;
+}
+
+message RenderResult {
+  string thumb_path = 1;
+}
+
+message StatResult {
+  repeated CMsgFileStat stats = 1;
+}
+
+message CMsgFileStat {
+  string path = 1;
+  bool exists = 2;
+  int64 size_bytes = 3;
+  int64 mtime_ms = 4;
+}
+
+message ExportResult {
+  string path = 1; // artifact path relative to the data dir
+}
+
+message ProgressMessage {
+  string id = 1;
+  int32 done = 2;
+  int32 total = 3;
+  string unit = 4; // "slides" | "pages" | ...
+}
+
+message LogMessage {
+  ELogLevel level = 1;
+  string message = 2;
+}
+
+enum ELogLevel {
+  E_LOG_LEVEL_UNSPECIFIED = 0;
+  E_LOG_LEVEL_DEBUG = 1;
+  E_LOG_LEVEL_INFO = 2;
+  E_LOG_LEVEL_WARN = 3;
+  E_LOG_LEVEL_ERROR = 4;
+}
+
+message FsMessage {
+  string source_id = 1;
+  string path = 2;
+  EFsEventKind kind = 3;
+}
+
+enum EFsEventKind {
+  E_FS_EVENT_KIND_UNSPECIFIED = 0;
+  E_FS_EVENT_KIND_CREATED = 1;
+  E_FS_EVENT_KIND_MODIFIED = 2;
+  E_FS_EVENT_KIND_REMOVED = 3;
+  E_FS_EVENT_KIND_RENAMED = 4;
+}
+
+message OcrStatusMessage {
+  EOcrState state = 1;
+  string detail = 2;
+}
+
+enum EOcrState {
+  E_OCR_STATE_UNSPECIFIED = 0;
+  E_OCR_STATE_STARTING = 1;
+  E_OCR_STATE_READY = 2;
+  E_OCR_STATE_STOPPED = 3;
+  E_OCR_STATE_UNAVAILABLE = 4;
+}

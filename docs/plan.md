@@ -71,10 +71,10 @@ Files → scan(Rust) → assets 表 → job queue → extract(Rust+外部工具)
 
 三层职责（沿用讨论结论）：
 
-| 层 | 回答的问题 | 归属 |
-| --- | --- | --- |
-| Extraction | 文件里有什么？ | Rust worker + 外部工具 |
-| Index | 这些东西在哪里？ | SQLite + 浏览器索引 |
+| 层            | 回答的问题         | 归属                                          |
+| ------------- | ------------------ | --------------------------------------------- |
+| Extraction    | 文件里有什么？     | Rust worker + 外部工具                        |
+| Index         | 这些东西在哪里？   | SQLite + 浏览器索引                           |
 | Agent（未来） | 用户到底想要什么？ | TS Backend 中的 Tool User，绝不直接碰文件系统 |
 
 ### 进程边界（硬约束）
@@ -84,35 +84,35 @@ Files → scan(Rust) → assets 表 → job queue → extract(Rust+外部工具)
 
 ## 3. 已定的技术决策
 
-| 决策点 | 选择 | 理由 |
-| --- | --- | --- |
-| 前端框架 | Vue 3 + Vite + TypeScript（SPA） | 纯本地工具，无 SEO 需求，不需要 Nuxt |
-| 前端状态 / UI | Pinia + **shadcn-vue**（Reka UI + Tailwind CSS v4） | 组件源码拷入仓库、完全可改；Robert 拍板（2026-08-25，替代 Naive UI） |
-| 后端运行时 | **Node.js 24 LTS + pnpm**（`.nvmrc` + engines `24.x`；Robert 拍板 2026-08-25） | 符合个人 TS 规范；放弃 Bun 运行时，SQLite 走 better-sqlite3 |
-| 后端框架 | Fastify + @fastify/websocket | 轻量、TS 支持好、内建 schema 校验 |
-| 数据库 | SQLite + **TypeORM**（<typeorm@1.x>，better-sqlite3 驱动）+ FTS5 | 单文件、同步驱动适合本地服务；实体/迁移/DataSource 约定见 §5.2；FTS5 作服务端兜底搜索 |
-| 数据库迁移 | TypeORM 迁移：`<timestamp>-<PascalCase>.ts`、raw SQL、启动自动应用 | tsup 程序化脚本 `migration:generate/run/revert/check` 替代 typeorm CLI（其 TS loader 在 Node 24 下与 legacy decorators 不兼容） |
-| Worker 协议 | **Protobuf**（buf 管 .proto；Rust prost / TS `@bufbuild/protobuf`；stdio 长度分隔帧；消息命名按 proto 规范：`*Request/*Response` 封套、事件 `*Message`、`E` 前缀枚举） | schema 单一权威，codegen 在构建期消灭两端漂移；**生成物全部构建时产出、只提交 .proto**；调试走一次性 CLI 子命令的 JSON 输出 |
-| worker 二进制 | 约定 `bin/mentro-worker`（gitignore），`pnpm build:worker` 拷贝；`MENTRO_WORKER_BIN` 可覆盖 | dev / prod / compose 三态一致 |
-| Rust worker | Cargo workspace，protobuf over stdio 长驻进程，**全部第三方集成的唯一入口** | 单机父子进程，裸 protobuf 帧足够，无需 gRPC / SignalR；spawn 一次、常驻、零每次启动开销；Node 侧不直接调外部工具 |
-| 内容哈希 | blake3 | GB 级文件哈希速度远超 SHA-256，适合大语料 |
-| 文件类型检测 | 内容嗅探（`infer` crate）+ 扩展名兜底 | 不信任扩展名 |
-| ID 策略 | ULID（TS 侧生成，worker 只回传） | 可排序、可读；DB 归 TS 所有，worker 保持无状态 |
-| PDF 工具 | Poppler（`pdftotext` / `pdftoppm` / `pdfinfo`） | macOS `brew install poppler` 即得，文本+渲染都成熟 |
-| Office 渲染 | **Gotenberg 现成镜像**（`gotenberg/gotenberg:8.x-libreoffice`，钉 tag；HTTP API，内置 LibreOffice 进程池） | 宿主机零 Office 依赖；池化热转换免冷启动；与 PaddleOCR 容器同构（`/health` + POST），§7.6 模型统一；注意 8.30 起字体栈精简——钉 tag + ref/ 回归兜底 |
-| 素材切割/导出 | PPTX 选页 = **Rust OOXML 手术**（部件原样拷贝，保真）；PDF 选页/合并 = 纯 Rust（`lopdf`）或 qpdf | 手术比 UNO 保存保真（不经重序列化）；跨文件合并 PPTX 是难 case，用 PDF 合成兜底 |
-| 媒体工具 | FFmpeg / ffprobe | 元数据 + 抽帧 |
-| 文件监听 | Rust `notify` crate（worker `watch` action） | 第三方交互收敛在 Rust；Node 不碰文件系统 |
-| Finder 定位 | worker `reveal` action | 平台差异留在 Rust（macOS `open -R`） |
-| OCR | **PaddleOCR 官方 serving 容器**（PaddleX `--serve --pipeline OCR`，PP-OCRv5 中英模型） | 中文识别远好于 tesseract；Python 重依赖封进镜像；worker 管容器生命周期，缺运行时则优雅降级（§7.6） |
-| 浏览器搜索 V1 | MiniSearch | 轻量、字段加权、fuzzy、prefix；FlexSearch 类型质量差 |
-| 浏览器搜索升级 | SQLite WASM FTS5 或 tantivy-wasm | 触发条件见 §9 |
-| 包管理 | pnpm（workspace monorepo），`packageManager` 钉版本 | 个人 TS 规范 |
-| 网络与鉴权 | **JWT（HMAC-SHA256）+ 刷新会话**：登录发 access（1h）+ 可吊销 refresh（30 天，DB 会话表，每次刷新轮换）；HTTP `Authorization: Bearer`，WS `?token=`；密码 **argon2id**；登录限速；默认绑 127.0.0.1:37797（`MENTRO_PORT`/`MENTRO_BIND` 可覆盖） | 多端各自登录持有令牌；管理员重置密码即吊销该用户全部会话；文件仅按 assetId 暴露、不接受路径参数（防穿越）；JWT 密钥首次启动生成于 `data/` |
-| 中文分词 | **jieba-wasm**（server 端 FTS5 入库前预分词 + 浏览器 MiniSearch 索引/查询同一 wasm） | 两端分词口径一致，中文召回显著优于逐字 token；无原生依赖 |
-| 扫描忽略 | 内置规则（`.git`、`node_modules`、隐藏目录、`data/`、`target/`、AppleDouble `._*`）+ 每源根 `.mentroignore`（gitignore 风格 glob） | 内置保底常见噪声，per-source 应对杂目录 |
-| 大文件上限 | 可配置（默认 5 GB，`MENTRO_MAX_FILE_SIZE`）：超限只记 size/mtime，不哈希不提取，UI 标记 oversized | 扫描可控；需要时调高即可 |
-| 部署形态 | docker compose：mentro（server + worker 同容器）+ gotenberg + paddle-ocr，`data/` 卷挂载 | 一条命令拉起全家桶；TLS 不内建，跨网访问建议反代（Caddy / nginx） |
+| 决策点         | 选择                                                                                                                                                                                                                                           | 理由                                                                                                                                               |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 前端框架       | Vue 3 + Vite + TypeScript（SPA）                                                                                                                                                                                                               | 纯本地工具，无 SEO 需求，不需要 Nuxt                                                                                                               |
+| 前端状态 / UI  | Pinia + **shadcn-vue**（Reka UI + Tailwind CSS v4）                                                                                                                                                                                            | 组件源码拷入仓库、完全可改；Robert 拍板（2026-08-25，替代 Naive UI）                                                                               |
+| 后端运行时     | **Node.js 24 LTS + pnpm**（`.nvmrc` + engines `24.x`；Robert 拍板 2026-08-25）                                                                                                                                                                 | 符合个人 TS 规范；放弃 Bun 运行时，SQLite 走 better-sqlite3                                                                                        |
+| 后端框架       | Fastify + @fastify/websocket                                                                                                                                                                                                                   | 轻量、TS 支持好、内建 schema 校验                                                                                                                  |
+| 数据库         | SQLite + **TypeORM**（<typeorm@1.x>，better-sqlite3 驱动）+ FTS5                                                                                                                                                                               | 单文件、同步驱动适合本地服务；实体/迁移/DataSource 约定见 §5.2；FTS5 作服务端兜底搜索                                                              |
+| 数据库迁移     | TypeORM 迁移：`<timestamp>-<PascalCase>.ts`、raw SQL、启动自动应用                                                                                                                                                                             | tsup 程序化脚本 `migration:generate/run/revert/check` 替代 typeorm CLI（其 TS loader 在 Node 24 下与 legacy decorators 不兼容）                    |
+| Worker 协议    | **Protobuf**（buf 管 .proto；Rust prost / TS `@bufbuild/protobuf`；stdio 长度分隔帧；消息命名按 proto 规范：`*Request/*Response` 封套、事件 `*Message`、`E` 前缀枚举）                                                                         | schema 单一权威，codegen 在构建期消灭两端漂移；**生成物全部构建时产出、只提交 .proto**；调试走一次性 CLI 子命令的 JSON 输出                        |
+| worker 二进制  | 约定 `bin/mentro-worker`（gitignore），`pnpm build:worker` 拷贝；`MENTRO_WORKER_BIN` 可覆盖                                                                                                                                                    | dev / prod / compose 三态一致                                                                                                                      |
+| Rust worker    | Cargo workspace，protobuf over stdio 长驻进程，**全部第三方集成的唯一入口**                                                                                                                                                                    | 单机父子进程，裸 protobuf 帧足够，无需 gRPC / SignalR；spawn 一次、常驻、零每次启动开销；Node 侧不直接调外部工具                                   |
+| 内容哈希       | blake3                                                                                                                                                                                                                                         | GB 级文件哈希速度远超 SHA-256，适合大语料                                                                                                          |
+| 文件类型检测   | 内容嗅探（`infer` crate）+ 扩展名兜底                                                                                                                                                                                                          | 不信任扩展名                                                                                                                                       |
+| ID 策略        | ULID（TS 侧生成，worker 只回传）                                                                                                                                                                                                               | 可排序、可读；DB 归 TS 所有，worker 保持无状态                                                                                                     |
+| PDF 工具       | Poppler（`pdftotext` / `pdftoppm` / `pdfinfo`）                                                                                                                                                                                                | macOS `brew install poppler` 即得，文本+渲染都成熟                                                                                                 |
+| Office 渲染    | **Gotenberg 现成镜像**（`gotenberg/gotenberg:8.x-libreoffice`，钉 tag；HTTP API，内置 LibreOffice 进程池）                                                                                                                                     | 宿主机零 Office 依赖；池化热转换免冷启动；与 PaddleOCR 容器同构（`/health` + POST），§7.6 模型统一；注意 8.30 起字体栈精简——钉 tag + ref/ 回归兜底 |
+| 素材切割/导出  | PPTX 选页 = **Rust OOXML 手术**（部件原样拷贝，保真）；PDF 选页/合并 = 纯 Rust（`lopdf`）或 qpdf                                                                                                                                               | 手术比 UNO 保存保真（不经重序列化）；跨文件合并 PPTX 是难 case，用 PDF 合成兜底                                                                    |
+| 媒体工具       | FFmpeg / ffprobe                                                                                                                                                                                                                               | 元数据 + 抽帧                                                                                                                                      |
+| 文件监听       | Rust `notify` crate（worker `watch` action）                                                                                                                                                                                                   | 第三方交互收敛在 Rust；Node 不碰文件系统                                                                                                           |
+| Finder 定位    | worker `reveal` action                                                                                                                                                                                                                         | 平台差异留在 Rust（macOS `open -R`）                                                                                                               |
+| OCR            | **PaddleOCR 官方 serving 容器**（PaddleX `--serve --pipeline OCR`，PP-OCRv5 中英模型）                                                                                                                                                         | 中文识别远好于 tesseract；Python 重依赖封进镜像；worker 管容器生命周期，缺运行时则优雅降级（§7.6）                                                 |
+| 浏览器搜索 V1  | MiniSearch                                                                                                                                                                                                                                     | 轻量、字段加权、fuzzy、prefix；FlexSearch 类型质量差                                                                                               |
+| 浏览器搜索升级 | SQLite WASM FTS5 或 tantivy-wasm                                                                                                                                                                                                               | 触发条件见 §9                                                                                                                                      |
+| 包管理         | pnpm（workspace monorepo），`packageManager` 钉版本                                                                                                                                                                                            | 个人 TS 规范                                                                                                                                       |
+| 网络与鉴权     | **JWT（HMAC-SHA256）+ 刷新会话**：登录发 access（1h）+ 可吊销 refresh（30 天，DB 会话表，每次刷新轮换）；HTTP `Authorization: Bearer`，WS `?token=`；密码 **argon2id**；登录限速；默认绑 127.0.0.1:37797（`MENTRO_PORT`/`MENTRO_BIND` 可覆盖） | 多端各自登录持有令牌；管理员重置密码即吊销该用户全部会话；文件仅按 assetId 暴露、不接受路径参数（防穿越）；JWT 密钥首次启动生成于 `data/`          |
+| 中文分词       | **jieba-wasm**（server 端 FTS5 入库前预分词 + 浏览器 MiniSearch 索引/查询同一 wasm）                                                                                                                                                           | 两端分词口径一致，中文召回显著优于逐字 token；无原生依赖                                                                                           |
+| 扫描忽略       | 内置规则（`.git`、`node_modules`、隐藏目录、`data/`、`target/`、AppleDouble `._*`）+ 每源根 `.mentroignore`（gitignore 风格 glob）                                                                                                             | 内置保底常见噪声，per-source 应对杂目录                                                                                                            |
+| 大文件上限     | 可配置（默认 5 GB，`MENTRO_MAX_FILE_SIZE`）：超限只记 size/mtime，不哈希不提取，UI 标记 oversized                                                                                                                                              | 扫描可控；需要时调高即可                                                                                                                           |
+| 部署形态       | docker compose：mentro（server + worker 同容器）+ gotenberg + paddle-ocr，`data/` 卷挂载                                                                                                                                                       | 一条命令拉起全家桶；TLS 不内建，跨网访问建议反代（Caddy / nginx）                                                                                  |
 
 ## 4. 仓库结构
 
@@ -197,90 +197,90 @@ server 启动时对 `data/` 加 advisory file lock：重复实例立即退出，
 代表实体（完整风格示范）：
 
 ```ts
-import { Column, Entity, Index, PrimaryColumn } from 'typeorm'
+import { Column, Entity, Index, PrimaryColumn } from "typeorm";
 
-@Entity({ name: 'assets' })
-@Index('uq_assets_path', ['path'], { unique: true })
-@Index('idx_assets_source', ['sourceId'])
+@Entity({ name: "assets" })
+@Index("uq_assets_path", ["path"], { unique: true })
+@Index("idx_assets_source", ["sourceId"])
 export class Asset {
-  @PrimaryColumn({ type: 'text', primaryKeyConstraintName: 'pk_assets' })
-  id!: string // ULID
+  @PrimaryColumn({ type: "text", primaryKeyConstraintName: "pk_assets" })
+  id!: string; // ULID
 
-  @Column({ name: 'source_id', type: 'text', nullable: false })
-  sourceId!: string
+  @Column({ name: "source_id", type: "text", nullable: false })
+  sourceId!: string;
 
-  @Column({ type: 'text', nullable: false })
-  path!: string
+  @Column({ type: "text", nullable: false })
+  path!: string;
 
-  @Column({ name: 'size_bytes', type: 'integer', nullable: false })
-  sizeBytes!: number
+  @Column({ name: "size_bytes", type: "integer", nullable: false })
+  sizeBytes!: number;
 
-  @Column({ name: 'mtime_ms', type: 'integer', nullable: false })
-  mtimeMs!: number
+  @Column({ name: "mtime_ms", type: "integer", nullable: false })
+  mtimeMs!: number;
 
-  @Column({ name: 'content_hash', type: 'text', nullable: true })
-  contentHash!: string | null // blake3 hex
+  @Column({ name: "content_hash", type: "text", nullable: true })
+  contentHash!: string | null; // blake3 hex
 
-  @Column({ type: 'text', nullable: true })
-  mime!: string | null
+  @Column({ type: "text", nullable: true })
+  mime!: string | null;
 
-  @Column({ type: 'text', nullable: false })
-  kind!: string // 'text'|'pdf'|'presentation'|'document'|'spreadsheet'|'image'|'video'|'audio'|'archive'|'other'
+  @Column({ type: "text", nullable: false })
+  kind!: string; // 'text'|'pdf'|'presentation'|'document'|'spreadsheet'|'image'|'video'|'audio'|'archive'|'other'
 
   @Column({
-    name: 'extraction_status',
-    type: 'text',
+    name: "extraction_status",
+    type: "text",
     nullable: false,
-    default: 'pending',
+    default: "pending",
   })
-  extractionStatus!: string // 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+  extractionStatus!: string; // 'pending' | 'running' | 'done' | 'failed' | 'skipped'
 
-  @Column({ name: 'extraction_version', type: 'integer', nullable: true })
-  extractionVersion!: number | null // 提取器版本，bump 触发全量重提取
+  @Column({ name: "extraction_version", type: "integer", nullable: true })
+  extractionVersion!: number | null; // 提取器版本，bump 触发全量重提取
 
-  @Column({ name: 'extracted_at', type: 'datetime', nullable: true })
-  extractedAt!: Date | null
+  @Column({ name: "extracted_at", type: "datetime", nullable: true })
+  extractedAt!: Date | null;
 
-  @Column({ type: 'text', nullable: true })
-  error!: string | null
+  @Column({ type: "text", nullable: true })
+  error!: string | null;
 }
 
-@Entity({ name: 'content_units' })
+@Entity({ name: "content_units" })
 @Index(
-  'uq_content_units_asset_ordinal_type',
-  ['assetId', 'ordinal', 'unitType'],
+  "uq_content_units_asset_ordinal_type",
+  ["assetId", "ordinal", "unitType"],
   { unique: true },
 )
 export class ContentUnit {
-  @PrimaryColumn({ type: 'text', primaryKeyConstraintName: 'pk_content_units' })
-  id!: string // ULID
+  @PrimaryColumn({ type: "text", primaryKeyConstraintName: "pk_content_units" })
+  id!: string; // ULID
 
-  @Column({ name: 'asset_id', type: 'text', nullable: false })
-  assetId!: string
+  @Column({ name: "asset_id", type: "text", nullable: false })
+  assetId!: string;
 
-  @Column({ type: 'integer', nullable: false })
-  ordinal!: number // 页/幻灯片/表序号，1-based；整文件类为 1
+  @Column({ type: "integer", nullable: false })
+  ordinal!: number; // 页/幻灯片/表序号，1-based；整文件类为 1
 
-  @Column({ name: 'unit_type', type: 'text', nullable: false })
-  unitType!: string // 'page' | 'slide' | 'sheet' | 'frame' | 'whole'
+  @Column({ name: "unit_type", type: "text", nullable: false })
+  unitType!: string; // 'page' | 'slide' | 'sheet' | 'frame' | 'whole'
 
-  @Column({ type: 'text', nullable: true })
-  title!: string | null
+  @Column({ type: "text", nullable: true })
+  title!: string | null;
 
-  @Column({ type: 'text', nullable: true })
-  text!: string | null // 提取文本（可空：纯图/无字幕视频）
+  @Column({ type: "text", nullable: true })
+  text!: string | null; // 提取文本（可空：纯图/无字幕视频）
 
-  @Column({ name: 'start_ms', type: 'integer', nullable: true })
-  startMs!: number | null // 音视频定位
+  @Column({ name: "start_ms", type: "integer", nullable: true })
+  startMs!: number | null; // 音视频定位
 
-  @Column({ name: 'end_ms', type: 'integer', nullable: true })
-  endMs!: number | null
+  @Column({ name: "end_ms", type: "integer", nullable: true })
+  endMs!: number | null;
 
-  @Column({ name: 'thumb_path', type: 'text', nullable: true })
-  thumbPath!: string | null // 相对 data/ 路径
+  @Column({ name: "thumb_path", type: "text", nullable: true })
+  thumbPath!: string | null; // 相对 data/ 路径
 
-  @Column({ name: 'meta_json', type: 'text', nullable: true })
-  metaJson!: string | null
+  @Column({ name: "meta_json", type: "text", nullable: true })
+  metaJson!: string | null;
 }
 ```
 
@@ -317,34 +317,34 @@ mentro://<assetId>/sheet/2
 
 鉴权：除 `/api/auth/*`、健康检查与静态资源外，所有端点要求 `Authorization: Bearer <JWT>`（WS 用 `?token=`）。注册在用户数为 0 时无条件开放（首位注册者成为 super_admin）；否则受 `allowRegistration` 设置控制。
 
-| Method | Path | 说明 |
-| --- | --- | --- |
-| POST | `/api/auth/register` | 注册：用户名 `/^[A-Za-z0-9_-]{3,32}$/`、密码 ≥ 8 位；用户数 0 时开放且成为 super_admin |
-| POST | `/api/auth/login` | 登录 → access + refresh 令牌对；限速防暴破 |
-| POST | `/api/auth/refresh` | 刷新（refresh 轮换，旧 token 作废） |
-| POST | `/api/auth/logout` | 吊销当前 refresh 会话 |
-| GET | `/api/auth/me` | 当前用户信息 |
-| POST | `/api/auth/password` | 修改自己的密码（成功后吊销其他会话） |
-| GET | `/api/status` | server / worker / 外部工具可用性 |
-| GET | `/api/sources` | 源列表 |
-| POST | `/api/sources` | 添加源 `{ rootPath }`，触发首扫并建立监听 |
-| DELETE | `/api/sources/:id` | 移除源（保留已提取内容可选） |
-| POST | `/api/sources/:id/rescan` | 全量重扫 |
-| GET | `/api/assets` | 分页 + kind/source/时间过滤 |
-| GET | `/api/assets/:id` | 详情 + content units |
-| GET | `/api/assets/:id/file` | 原文件流（预览用，Range 支持） |
-| POST | `/api/assets/:id/reveal` | Finder 定位（转发 worker `reveal`） |
-| GET | `/api/index` | 浏览器搜索 bundle（ETag = index_version） |
-| GET | `/api/thumbs/:unitId` | 缩略图（懒渲染的触发点） |
-| POST | `/api/render/:assetId/:ordinal` | 请求渲染指定单元 |
-| GET | `/api/jobs` | 任务列表与状态 |
-| POST | `/api/assets/:id/retry` | 手动重试失败提取 |
-| POST | `/api/export` | 选单元集合 + 目标格式 → 导出 job（M6；PDF 切割合并 / PPTX OOXML 手术） |
-| GET | `/api/admin/users` | 用户列表（super_admin） |
-| PATCH | `/api/admin/users/:id` | 修改用户名 / 启用禁用（super_admin 不可被禁用） |
-| POST | `/api/admin/users/:id/reset-password` | 管理员直接设定新密码，并吊销该用户全部会话 |
-| DELETE | `/api/admin/users/:id` | 删除用户（不可删自己；连带吊销会话） |
-| GET/PATCH | `/api/admin/settings` | 读取/设置 `allowRegistration` 等（super_admin） |
+| Method    | Path                                  | 说明                                                                                   |
+| --------- | ------------------------------------- | -------------------------------------------------------------------------------------- |
+| POST      | `/api/auth/register`                  | 注册：用户名 `/^[A-Za-z0-9_-]{3,32}$/`、密码 ≥ 8 位；用户数 0 时开放且成为 super_admin |
+| POST      | `/api/auth/login`                     | 登录 → access + refresh 令牌对；限速防暴破                                             |
+| POST      | `/api/auth/refresh`                   | 刷新（refresh 轮换，旧 token 作废）                                                    |
+| POST      | `/api/auth/logout`                    | 吊销当前 refresh 会话                                                                  |
+| GET       | `/api/auth/me`                        | 当前用户信息                                                                           |
+| POST      | `/api/auth/password`                  | 修改自己的密码（成功后吊销其他会话）                                                   |
+| GET       | `/api/status`                         | server / worker / 外部工具可用性                                                       |
+| GET       | `/api/sources`                        | 源列表                                                                                 |
+| POST      | `/api/sources`                        | 添加源 `{ rootPath }`，触发首扫并建立监听                                              |
+| DELETE    | `/api/sources/:id`                    | 移除源（保留已提取内容可选）                                                           |
+| POST      | `/api/sources/:id/rescan`             | 全量重扫                                                                               |
+| GET       | `/api/assets`                         | 分页 + kind/source/时间过滤                                                            |
+| GET       | `/api/assets/:id`                     | 详情 + content units                                                                   |
+| GET       | `/api/assets/:id/file`                | 原文件流（预览用，Range 支持）                                                         |
+| POST      | `/api/assets/:id/reveal`              | Finder 定位（转发 worker `reveal`）                                                    |
+| GET       | `/api/index`                          | 浏览器搜索 bundle（ETag = index_version）                                              |
+| GET       | `/api/thumbs/:unitId`                 | 缩略图（懒渲染的触发点）                                                               |
+| POST      | `/api/render/:assetId/:ordinal`       | 请求渲染指定单元                                                                       |
+| GET       | `/api/jobs`                           | 任务列表与状态                                                                         |
+| POST      | `/api/assets/:id/retry`               | 手动重试失败提取                                                                       |
+| POST      | `/api/export`                         | 选单元集合 + 目标格式 → 导出 job（M6；PDF 切割合并 / PPTX OOXML 手术）                 |
+| GET       | `/api/admin/users`                    | 用户列表（super_admin）                                                                |
+| PATCH     | `/api/admin/users/:id`                | 修改用户名 / 启用禁用（super_admin 不可被禁用）                                        |
+| POST      | `/api/admin/users/:id/reset-password` | 管理员直接设定新密码，并吊销该用户全部会话                                             |
+| DELETE    | `/api/admin/users/:id`                | 删除用户（不可删自己；连带吊销会话）                                                   |
+| GET/PATCH | `/api/admin/settings`                 | 读取/设置 `allowRegistration` 等（super_admin）                                        |
 
 ### 6.2 WebSocket 事件（`/api/ws`）
 
@@ -442,21 +442,21 @@ mentro-worker ocr <image> [--json]           # 单图 OCR（调试容器链路�
 
 ### 7.3 可靠性设计模式
 
-| 模式 | Mentro 实现 |
-| --- | --- |
-| 身份栅栏（fencing triple） | 每个请求带 `assetId + contentHash`，响应回带，落库前校验，防陈旧写 |
-| 数据目录锁 + 专用退出码 | server 对 `data/` 加锁，重复启动 → 专用退出码 + 明确报错 |
-| 类型化杀灭通道（防 PID 复用） | 外部工具的杀灭命令走 mpsc 通道，只由仍持有原 `tokio::process::Child` 的 task 执行 |
-| 进程组杀灭 | Unix `process_group(0)`：soffice/ffmpeg 放独立进程组，超时先 SIGTERM 组、宽限后 SIGKILL 组，防孙进程（soffice.bin 等）泄漏 |
-| 外部工具并发隔离 | LibreOffice 经 Gotenberg 进程池（并发管理在容器内，worker 侧限流 2）；ffmpeg 用独立并发池 |
-| 外部资源独占所有权 + 观察文件 | PaddleOCR 容器由 worker 独占持有：观察文件 + `docker inspect` 认领/回收（§7.6） |
-| 崩溃循环熔断 | 同一 asset 连续 3 次提取失败 → `failed`，不再自动重试，等手动 retry 或重扫 |
-| 退出处置状态机 | job 状态机 + `retryable` 错误分类；deadline 驱动重试，不在 handler 里 sleep |
-| 版本化进度快照 | `pipeline.snapshot` 事件带 revision，节流渲染；前端只渲染快照 diff |
-| 双流 CLI 输出 | stderr 人读 / stdout 机器（§7.2） |
-| 每日滚动分级日志 | worker 日志写 `data/logs/worker/`，tracing + 滚动 appender |
-| 纯状态机内联测试 | `#[cfg(test)]` 只测无 IO 的状态机（§11） |
-| pnpm 编排多语言构建 | `pnpm build:worker` 编排 cargo 并拷贝二进制 |
+| 模式                          | Mentro 实现                                                                                                                |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| 身份栅栏（fencing triple）    | 每个请求带 `assetId + contentHash`，响应回带，落库前校验，防陈旧写                                                         |
+| 数据目录锁 + 专用退出码       | server 对 `data/` 加锁，重复启动 → 专用退出码 + 明确报错                                                                   |
+| 类型化杀灭通道（防 PID 复用） | 外部工具的杀灭命令走 mpsc 通道，只由仍持有原 `tokio::process::Child` 的 task 执行                                          |
+| 进程组杀灭                    | Unix `process_group(0)`：soffice/ffmpeg 放独立进程组，超时先 SIGTERM 组、宽限后 SIGKILL 组，防孙进程（soffice.bin 等）泄漏 |
+| 外部工具并发隔离              | LibreOffice 经 Gotenberg 进程池（并发管理在容器内，worker 侧限流 2）；ffmpeg 用独立并发池                                  |
+| 外部资源独占所有权 + 观察文件 | PaddleOCR 容器由 worker 独占持有：观察文件 + `docker inspect` 认领/回收（§7.6）                                            |
+| 崩溃循环熔断                  | 同一 asset 连续 3 次提取失败 → `failed`，不再自动重试，等手动 retry 或重扫                                                 |
+| 退出处置状态机                | job 状态机 + `retryable` 错误分类；deadline 驱动重试，不在 handler 里 sleep                                                |
+| 版本化进度快照                | `pipeline.snapshot` 事件带 revision，节流渲染；前端只渲染快照 diff                                                         |
+| 双流 CLI 输出                 | stderr 人读 / stdout 机器（§7.2）                                                                                          |
+| 每日滚动分级日志              | worker 日志写 `data/logs/worker/`，tracing + 滚动 appender                                                                 |
+| 纯状态机内联测试              | `#[cfg(test)]` 只测无 IO 的状态机（§11）                                                                                   |
+| pnpm 编排多语言构建           | `pnpm build:worker` 编排 cargo 并拷贝二进制                                                                                |
 
 **明确不做**：gRPC / SignalR 等重型 RPC（单机父子 IPC，裸 protobuf 帧足够）；浏览器侧 protobuf（HTTP/WS 保持 JSON + zod）；独立 Agent 进程（TS backend 承担）；worker 断线重连（父子同生命周期，daemon 化时再引入）。
 
@@ -515,19 +515,19 @@ docker run -d --name mentro-paddle-ocr \
 
 ## 8. 提取器矩阵
 
-| 格式 | 文本提取 | 缩略图/渲染 | 定位粒度 | 工具 | 阶段 |
-| --- | --- | --- | --- | --- | --- |
-| txt / md / csv / json | Rust 原生 | 无 | whole | — | M1 |
-| pdf | `pdftotext`（`\f` 分页） | `pdftoppm` | page | poppler | M1 |
-| pptx | OOXML：presentation.xml 定序 → slides/notes 的 `a:t` | Gotenberg(容器)→pdf→`pdftoppm` | slide | 自研 + Gotenberg | M3 |
-| docx | OOXML：`w:t` + 标题样式 | Gotenberg(容器)→pdf | page | 自研 + Gotenberg | M3 |
-| xlsx | sharedStrings + sheet 名 | 无 | sheet | 自研 | M3 |
-| png / jpg / webp | EXIF（`kamadak-exif`） | `image` crate 缩放 | whole | Rust 原生 | M4 |
-| mp4 / mov / mkv | —（M6 转写） | ffmpeg 抽帧（poster + 场景帧） | 时间段 | ffmpeg/ffprobe | M4 |
-| mp3 / wav | —（M6 转写） | 无 | 时间 | ffprobe | M4 |
-| heic | — | libheif | whole | libheif | M5 |
-| epub / zip | zip + html 文本 | 封面 | chapter | Rust crate | M5 |
-| 扫描版 PDF / 图片 OCR | PaddleOCR 容器（PP-OCRv5，中英） | — | page / whole | docker + PaddleX serving | M5 |
+| 格式                  | 文本提取                                             | 缩略图/渲染                    | 定位粒度     | 工具                     | 阶段 |
+| --------------------- | ---------------------------------------------------- | ------------------------------ | ------------ | ------------------------ | ---- |
+| txt / md / csv / json | Rust 原生                                            | 无                             | whole        | —                        | M1   |
+| pdf                   | `pdftotext`（`\f` 分页）                             | `pdftoppm`                     | page         | poppler                  | M1   |
+| pptx                  | OOXML：presentation.xml 定序 → slides/notes 的 `a:t` | Gotenberg(容器)→pdf→`pdftoppm` | slide        | 自研 + Gotenberg         | M3   |
+| docx                  | OOXML：`w:t` + 标题样式                              | Gotenberg(容器)→pdf            | page         | 自研 + Gotenberg         | M3   |
+| xlsx                  | sharedStrings + sheet 名                             | 无                             | sheet        | 自研                     | M3   |
+| png / jpg / webp      | EXIF（`kamadak-exif`）                               | `image` crate 缩放             | whole        | Rust 原生                | M4   |
+| mp4 / mov / mkv       | —（M6 转写）                                         | ffmpeg 抽帧（poster + 场景帧） | 时间段       | ffmpeg/ffprobe           | M4   |
+| mp3 / wav             | —（M6 转写）                                         | 无                             | 时间         | ffprobe                  | M4   |
+| heic                  | —                                                    | libheif                        | whole        | libheif                  | M5   |
+| epub / zip            | zip + html 文本                                      | 封面                           | chapter      | Rust crate               | M5   |
+| 扫描版 PDF / 图片 OCR | PaddleOCR 容器（PP-OCRv5，中英）                     | —                              | page / whole | docker + PaddleX serving | M5   |
 
 设计原则（沿用讨论结论）：**Rust owns the pipeline, not the formats**。每个提取器只输出统一的 Content Units；某工具渲染失真时换掉该提取器即可，不动核心。提取器带版本号（`extraction_version`），升级即全量重提取。
 
@@ -579,12 +579,12 @@ docker run -d --name mentro-paddle-ocr \
 
 ## 10. 前端设计
 
-| 视图 | 内容 |
-| --- | --- |
-| Login | 登录 / 注册（`allowRegistration` 关闭时隐藏注册入口；首位用户注册页提示将成为管理员） |
-| Search | 搜索框 + 过滤器（类型/源/时间）、结果卡片（缩略图 + 高亮摘要）、键盘导航 |
-| AssetDetail | 单元列表（页/幻灯片缩略图 + 文本）、元数据、打开文件 / Finder 定位 |
-| Settings | 源管理、任务监控（pipeline 快照渲染）、外部工具状态（doctor 结果）、用户管理（super_admin：列表 / 改名 / 禁用 / 重置密码 / 删除 / 注册开关）、修改自己的密码 |
+| 视图        | 内容                                                                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Login       | 登录 / 注册（`allowRegistration` 关闭时隐藏注册入口；首位用户注册页提示将成为管理员）                                                                        |
+| Search      | 搜索框 + 过滤器（类型/源/时间）、结果卡片（缩略图 + 高亮摘要）、键盘导航                                                                                     |
+| AssetDetail | 单元列表（页/幻灯片缩略图 + 文本）、元数据、打开文件 / Finder 定位                                                                                           |
+| Settings    | 源管理、任务监控（pipeline 快照渲染）、外部工具状态（doctor 结果）、用户管理（super_admin：列表 / 改名 / 禁用 / 重置密码 / 删除 / 注册开关）、修改自己的密码 |
 
 预览交互：
 
@@ -623,15 +623,15 @@ UI 文案中文优先；响应式布局——手机 / 平板浏览器可用（�
 
 ## 12. 里程碑
 
-| 阶段 | 内容 | 验收标准（基于 ref/ 语料） | 规模 |
-| --- | --- | --- | --- |
-| M0 脚手架 | pnpm workspace、apps/server、apps/web、packages/protocol、proto/（buf + 双端 codegen）、rust workspace、规范文件（.editorconfig/.prettierrc/eslint.config.js 从技能 assets 拷贝）、CI 骨架 | `pnpm gen:proto` 双端生成物就绪；`pnpm dev` 同时起 server+web；`pnpm build:worker` 出二进制；CI 绿 | S |
-| M1 用户+扫描+文本+服务端搜索 | 用户体系与 JWT（注册/登录/首个超管/注册开关/改密/管理端用户管理/会话吊销）、worker scan/stat/extract(text,pdf)+doctor；SQLite 迁移、job queue、FTS5；登录页 + 极简搜索页 | 首位注册者成为 super_admin 并可关闭注册；第二用户受开关控制；管理员重置密码后旧会话全部失效；ref/ 全量扫描完成；71 个 PDF 文本可搜并定位到页；重扫跳过未变文件 | L |
-| M2 浏览器本地搜索+多端 | `/api/index` bundle、WS delta、MiniSearch、pdf.js 跳页预览、token 鉴权与非回环绑定 | 二次搜索本地 < 50 ms；文件变更增量生效；bundle gzip 后 < 20 MB；第二台设备经 LAN 全流程可用 | M |
-| M3 Office | Gotenberg office 容器（现成镜像钉 tag）、pptx/docx/xlsx 文本（OOXML）、HTTP 渲染管线、页缩略图、懒渲染 | 19 个 PPTX 每页可搜、可看缩略图；PDF 页数与幻灯片数一致性校验通过（隐藏页等错位 case 被识别）；无容器运行时降级为仅文本；容器无响应/崩溃不影响 worker 存活（回收重建）；熔断生效 | L |
-| M4 媒体+增量监听 | 图片 EXIF+缩略图、ffprobe 元数据、视频海报帧+时间定位、notify 增量监听（worker `watch`） | 58 PNG + 6 JPG 可搜可缩略；视频结果点击跳时间点；新增文件自动入索引 | M |
-| M5 OCR + 补充格式 | PaddleOCR 容器（懒启动 + 生命周期管理 + 运行时探测）、heic、epub、docker compose 全家桶部署 | 扫描版海报文字可搜（中英）；无容器运行时的环境优雅缺失并明示；容器崩溃/OCR 失败不阻塞管线；compose 一键拉起后全功能可用 | L |
-| M6 智能层 | Whisper 转写、embedding 语义搜索、Agent Tool API（含 PPTX 选页切割与 PDF 合成导出）、WASM 搜索评估 | 音视频可按内容搜；Agent 经 Tool API 完成"找+取+导出"闭环（PPTX 选页保真导出）；索引规模达到 §9.2 触发线时完成升级评估 | L+ |
+| 阶段                         | 内容                                                                                                                                                                                       | 验收标准（基于 ref/ 语料）                                                                                                                                                       | 规模 |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| M0 脚手架                    | pnpm workspace、apps/server、apps/web、packages/protocol、proto/（buf + 双端 codegen）、rust workspace、规范文件（.editorconfig/.prettierrc/eslint.config.js 从技能 assets 拷贝）、CI 骨架 | `pnpm gen:proto` 双端生成物就绪；`pnpm dev` 同时起 server+web；`pnpm build:worker` 出二进制；CI 绿                                                                               | S    |
+| M1 用户+扫描+文本+服务端搜索 | 用户体系与 JWT（注册/登录/首个超管/注册开关/改密/管理端用户管理/会话吊销）、worker scan/stat/extract(text,pdf)+doctor；SQLite 迁移、job queue、FTS5；登录页 + 极简搜索页                   | 首位注册者成为 super_admin 并可关闭注册；第二用户受开关控制；管理员重置密码后旧会话全部失效；ref/ 全量扫描完成；71 个 PDF 文本可搜并定位到页；重扫跳过未变文件                   | L    |
+| M2 浏览器本地搜索+多端       | `/api/index` bundle、WS delta、MiniSearch、pdf.js 跳页预览、token 鉴权与非回环绑定                                                                                                         | 二次搜索本地 < 50 ms；文件变更增量生效；bundle gzip 后 < 20 MB；第二台设备经 LAN 全流程可用                                                                                      | M    |
+| M3 Office                    | Gotenberg office 容器（现成镜像钉 tag）、pptx/docx/xlsx 文本（OOXML）、HTTP 渲染管线、页缩略图、懒渲染                                                                                     | 19 个 PPTX 每页可搜、可看缩略图；PDF 页数与幻灯片数一致性校验通过（隐藏页等错位 case 被识别）；无容器运行时降级为仅文本；容器无响应/崩溃不影响 worker 存活（回收重建）；熔断生效 | L    |
+| M4 媒体+增量监听             | 图片 EXIF+缩略图、ffprobe 元数据、视频海报帧+时间定位、notify 增量监听（worker `watch`）                                                                                                   | 58 PNG + 6 JPG 可搜可缩略；视频结果点击跳时间点；新增文件自动入索引                                                                                                              | M    |
+| M5 OCR + 补充格式            | PaddleOCR 容器（懒启动 + 生命周期管理 + 运行时探测）、heic、epub、docker compose 全家桶部署                                                                                                | 扫描版海报文字可搜（中英）；无容器运行时的环境优雅缺失并明示；容器崩溃/OCR 失败不阻塞管线；compose 一键拉起后全功能可用                                                          | L    |
+| M6 智能层                    | Whisper 转写、embedding 语义搜索、Agent Tool API（含 PPTX 选页切割与 PDF 合成导出）、WASM 搜索评估                                                                                         | 音视频可按内容搜；Agent 经 Tool API 完成"找+取+导出"闭环（PPTX 选页保真导出）；索引规模达到 §9.2 触发线时完成升级评估                                                            | L+   |
 
 规模：S ≈ 1–2 天，M ≈ 3–5 天，L ≈ 5–8 天（业余时间投入的粗估）。
 
@@ -647,24 +647,24 @@ transcribe(assetId) -> 带时间戳文本
 
 ## 13. 风险与应对
 
-| 风险 | 影响 | 应对 |
-| --- | --- | --- |
+| 风险                                       | 影响                           | 应对                                                                                                                                                                    |
+| ------------------------------------------ | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | LibreOffice 渲染失真（字体/SmartArt/公式） | 幻灯片预览与 PowerPoint 不一致 | 文本索引不依赖渲染；渲染失败降级为无缩略图；`<data>/office-fonts` 补版权字体（挂载或薄镜像）；macOS 可选 AppleScript 驱动 PowerPoint 导出作为替代渲染器（提取器可替换） |
-| Gotenberg 第三方依赖（API 与镜像更新） | 升级后转换行为/字体变化 | 钉 tag，升级 = 显式决策 + ref/ 渲染回归；ext 层隔离使其整体可替换 |
-| PDF 页 ↔ 幻灯片序号错位（隐藏页等） | 页级缩略图/导出选错页 | 提取时校验 pdfinfo 页数 == 幻灯片数；不一致则标记映射可疑、禁用该 asset 的页级操作 |
-| 网络暴露文件内容 | 未授权访问泄露素材 | JWT 全端点鉴权；文件仅按 assetId 暴露、无路径参数；TLS 交反代；默认仍 127.0.0.1 |
-| 认证安全（暴破 / 令牌泄露） | 账户被入侵 | argon2id；登录限速；access 1h + refresh 30 天轮换可吊销；重置密码即吊销全部会话；JWT 密钥生成于 `data/`（备份即迁移） |
-| soffice 启动慢、profile 锁 | 批量首转慢 | 独立 UserInstallation、全局串行、首批预热一个实例常驻评估 |
-| 扫描版 PDF 无文本 | 搜不到 | V1 标记 no-text 不阻塞；M5 OCR 补齐 |
-| 巨文件哈希/提取耗时 | 扫描与队列堵塞 | blake3（GB/s 级）；mtime+size 预筛；job 超时 + 熔断 |
-| better-sqlite3 / argon2 原生模块 | Node 版本升级需重编 | engines 钉 Node 24；CI 覆盖 ubuntu，darwin 本机验证 |
-| TypeORM 1.x 主线较新 | API / 文档滞后 | 钉住小版本，升级经迁移 selftest 验证；每列显式 type 降低对 emitDecoratorMetadata 的依赖 |
-| ref/ 语料不可入库 | CI 无法用真实语料 | ref/ 已 gitignore；CI 用 testdata/ 合成夹具；corpus 测试仅本地 |
-| MiniSearch 规模上限 | 搜索变慢/内存涨 | §9.2 明确触发线与两条升级路径 |
-| 外部工具缺失 | 功能降级 | doctor + capabilities 上报，UI 明示缺什么、装什么 |
-| PaddleOCR 镜像 ~2 GB、首次拉取慢 | 首次 OCR 等待久 | 懒启动 + `ocr.status` 进度 + 模型缓存卷；tag 锁定后 README 提供预拉命令 |
-| CPU 推理约 1–3 s/页 | 大文档 OCR 耗时 | 页级并发 ≤ 2 + 逐页进度；预留 GPU 直通参数位 |
-| 容器运行时缺失（M3 起成为渲染硬依赖） | Office 缩略图与 OCR 不可用 | doctor 探测 docker/podman/OrbStack/colima；capability 优雅降级 + UI 指引；文本索引不受影响 |
+| Gotenberg 第三方依赖（API 与镜像更新）     | 升级后转换行为/字体变化        | 钉 tag，升级 = 显式决策 + ref/ 渲染回归；ext 层隔离使其整体可替换                                                                                                       |
+| PDF 页 ↔ 幻灯片序号错位（隐藏页等）        | 页级缩略图/导出选错页          | 提取时校验 pdfinfo 页数 == 幻灯片数；不一致则标记映射可疑、禁用该 asset 的页级操作                                                                                      |
+| 网络暴露文件内容                           | 未授权访问泄露素材             | JWT 全端点鉴权；文件仅按 assetId 暴露、无路径参数；TLS 交反代；默认仍 127.0.0.1                                                                                         |
+| 认证安全（暴破 / 令牌泄露）                | 账户被入侵                     | argon2id；登录限速；access 1h + refresh 30 天轮换可吊销；重置密码即吊销全部会话；JWT 密钥生成于 `data/`（备份即迁移）                                                   |
+| soffice 启动慢、profile 锁                 | 批量首转慢                     | 独立 UserInstallation、全局串行、首批预热一个实例常驻评估                                                                                                               |
+| 扫描版 PDF 无文本                          | 搜不到                         | V1 标记 no-text 不阻塞；M5 OCR 补齐                                                                                                                                     |
+| 巨文件哈希/提取耗时                        | 扫描与队列堵塞                 | blake3（GB/s 级）；mtime+size 预筛；job 超时 + 熔断                                                                                                                     |
+| better-sqlite3 / argon2 原生模块           | Node 版本升级需重编            | engines 钉 Node 24；CI 覆盖 ubuntu，darwin 本机验证                                                                                                                     |
+| TypeORM 1.x 主线较新                       | API / 文档滞后                 | 钉住小版本，升级经迁移 selftest 验证；每列显式 type 降低对 emitDecoratorMetadata 的依赖                                                                                 |
+| ref/ 语料不可入库                          | CI 无法用真实语料              | ref/ 已 gitignore；CI 用 testdata/ 合成夹具；corpus 测试仅本地                                                                                                          |
+| MiniSearch 规模上限                        | 搜索变慢/内存涨                | §9.2 明确触发线与两条升级路径                                                                                                                                           |
+| 外部工具缺失                               | 功能降级                       | doctor + capabilities 上报，UI 明示缺什么、装什么                                                                                                                       |
+| PaddleOCR 镜像 ~2 GB、首次拉取慢           | 首次 OCR 等待久                | 懒启动 + `ocr.status` 进度 + 模型缓存卷；tag 锁定后 README 提供预拉命令                                                                                                 |
+| CPU 推理约 1–3 s/页                        | 大文档 OCR 耗时                | 页级并发 ≤ 2 + 逐页进度；预留 GPU 直通参数位                                                                                                                            |
+| 容器运行时缺失（M3 起成为渲染硬依赖）      | Office 缩略图与 OCR 不可用     | doctor 探测 docker/podman/OrbStack/colima；capability 优雅降级 + UI 指引；文本索引不受影响                                                                              |
 
 ## 14. 未来方向（记录，不承诺）
 
