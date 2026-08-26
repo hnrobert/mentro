@@ -24,7 +24,11 @@ const assets = ref<LibraryAsset[]>([]);
 const total = ref(0);
 const page = ref(1);
 const search = ref("");
-const sort = ref<"uploaded" | "mtime">("uploaded");
+const sortKey = ref<"uploaded" | "mtime" | "size" | "name">("uploaded");
+const sortDir = ref<"asc" | "desc">("desc");
+const kindFilter = ref<string[]>([]); // empty = all
+const statusFilter = ref<string[]>([]);
+const openMenu = ref<string | null>(null); // column key of open menu
 const busy = ref(false);
 const newGroupName = ref("");
 const showInput = ref<string | null>(null); // group id being renamed
@@ -45,12 +49,20 @@ async function loadAssets(): Promise<void> {
           ? undefined
           : (selectedGroup.value ?? "ungrouped"),
       q: search.value || undefined,
-      sort: sort.value,
+      kind: kindFilter.value.length === 1 ? kindFilter.value[0] : undefined,
+      sort: sortKey.value,
+      sortDir: sortDir.value,
       page: page.value,
       pageSize: 50,
     });
-    assets.value = res.assets;
-    total.value = res.total;
+    let list = res.assets;
+    if (statusFilter.value.length > 0) {
+      list = list.filter((a) =>
+        statusFilter.value.includes(a.extractionStatus),
+      );
+    }
+    assets.value = list;
+    total.value = statusFilter.value.length > 0 ? list.length : res.total;
   } finally {
     busy.value = false;
   }
@@ -61,7 +73,12 @@ watch(selectedGroup, () => {
   void loadAssets();
 });
 watch(page, () => void loadAssets());
-watch(sort, () => void loadAssets());
+watch([sortKey, sortDir], () => void loadAssets());
+watch(kindFilter, () => {
+  page.value = 1;
+  void loadAssets();
+});
+watch(statusFilter, () => void loadAssets());
 
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 watch(search, () => {
@@ -152,6 +169,56 @@ function kindLabel(k: string): string {
     archive: "压缩包",
   };
   return map[k] ?? k;
+}
+
+function toggleSort(col: "uploaded" | "mtime" | "size" | "name"): void {
+  if (sortKey.value === col) {
+    if (sortDir.value === "desc") sortDir.value = "asc";
+    else {
+      // third click resets to default
+      sortKey.value = "uploaded";
+      sortDir.value = "desc";
+    }
+  } else {
+    sortKey.value = col;
+    sortDir.value = "desc";
+  }
+  openMenu.value = null;
+}
+
+function toggleKindFilter(k: string): void {
+  const i = kindFilter.value.indexOf(k);
+  if (i >= 0) kindFilter.value.splice(i, 1);
+  else kindFilter.value.push(k);
+}
+
+function toggleStatusFilter(st: string): void {
+  const i = statusFilter.value.indexOf(st);
+  if (i >= 0) statusFilter.value.splice(i, 1);
+  else statusFilter.value.push(st);
+}
+
+function clearMenu(): void {
+  openMenu.value = null;
+}
+
+const KIND_OPTIONS = [
+  { v: "pdf", label: "PDF" },
+  { v: "presentation", label: "演示" },
+  { v: "document", label: "文档" },
+  { v: "spreadsheet", label: "表格" },
+  { v: "image", label: "图片" },
+  { v: "video", label: "视频" },
+  { v: "audio", label: "音频" },
+  { v: "text", label: "文本" },
+  { v: "archive", label: "压缩包" },
+];
+
+const STATUS_OPTIONS = ["done", "pending", "running", "failed", "skipped"];
+
+function sortIndicator(col: string): string {
+  if (sortKey.value !== col) return "";
+  return sortDir.value === "desc" ? " ↓" : " ↑";
 }
 
 function flatten(
@@ -254,75 +321,203 @@ onMounted(() => {
     </div>
 
     <!-- File list -->
-    <div class="min-w-0 flex-1 overflow-hidden">
-      <div class="flex items-center gap-3 border-b px-4 py-2">
+    <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <div
+        class="flex shrink-0 items-center gap-3 border-b bg-background px-4 py-2"
+      >
         <Input v-model="search" class="max-w-xs" placeholder="按文件名过滤…" />
-        <select
-          v-model="sort"
-          class="h-9 rounded-md border border-input bg-background px-2 text-sm"
-        >
-          <option value="uploaded">按添加时间</option>
-          <option value="mtime">按文件时间</option>
-        </select>
         <span class="ml-auto text-sm text-muted-foreground">
           {{ total }} 个文件
         </span>
       </div>
 
-      <div class="overflow-y-auto" style="max-height: calc(100vh - 105px)">
-        <table class="w-full text-sm" v-if="assets.length > 0">
-          <thead
-            class="sticky top-0 border-b bg-muted/50 text-left text-xs text-muted-foreground"
+      <!-- Fixed header (outside the scroll area) with per-column menus -->
+      <div
+        class="relative grid shrink-0 grid-cols-[minmax(0,1fr)_64px_80px_96px_96px_72px_48px] gap-x-2 border-b bg-muted px-4 py-2 text-left text-xs font-medium text-muted-foreground"
+        @mouseleave="openMenu = null"
+      >
+        <button
+          class="flex items-center gap-0.5 truncate text-left hover:text-foreground"
+          @click="openMenu = openMenu === 'name' ? null : 'name'"
+        >
+          文件名{{ sortIndicator("name") }}
+          <svg
+            v-if="kindFilter.length === 0 && statusFilter.length === 0"
+            class="h-3 w-3 opacity-40"
+            viewBox="0 0 16 16"
+            fill="currentColor"
           >
-            <tr>
-              <th class="px-4 py-2 font-medium">文件名</th>
-              <th class="px-2 py-2 font-medium">类型</th>
-              <th class="px-2 py-2 font-medium">大小</th>
-              <th class="px-2 py-2 font-medium">添加时间</th>
-              <th class="px-2 py-2 font-medium">文件时间</th>
-              <th class="px-2 py-2 font-medium">状态</th>
-              <th class="px-2 py-2" />
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="a in assets"
-              :key="a.id"
-              class="cursor-pointer border-b transition-colors hover:bg-accent/30"
-              @click="openDetail(a)"
-            >
-              <td class="max-w-xs truncate px-4 py-2 font-medium">
-                {{ a.path.split("/").pop() }}
-              </td>
-              <td class="px-2 py-2">
-                <span class="rounded bg-muted px-1.5 py-0.5 text-xs">
-                  {{ kindLabel(a.kind) }}
-                </span>
-              </td>
-              <td class="px-2 py-2 text-muted-foreground">
-                {{ fmtSize(a.sizeBytes) }}
-              </td>
-              <td class="px-2 py-2 text-muted-foreground">
-                {{ fmtTime(a.uploadedAt) }}
-              </td>
-              <td class="px-2 py-2 text-muted-foreground">
-                {{ fmtTime(a.mtimeMs) }}
-              </td>
-              <td class="px-2 py-2 text-xs text-muted-foreground">
-                {{ a.extractionStatus }}
-              </td>
-              <td class="px-2 py-2 text-right">
-                <button
-                  class="px-1 text-xs text-muted-foreground hover:text-destructive"
-                  title="删除"
-                  @click.stop="removeAsset(a)"
-                >
-                  删除
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+            <path
+              d="M4 6l4 4 4-4"
+              stroke="currentColor"
+              stroke-width="1.5"
+              fill="none"
+            />
+          </svg>
+        </button>
+        <button
+          class="flex items-center gap-0.5 truncate text-left hover:text-foreground"
+          :class="kindFilter.length > 0 ? 'text-foreground' : ''"
+          @click="openMenu = openMenu === 'kind' ? null : 'kind'"
+        >
+          类型{{ kindFilter.length > 0 ? ` (${kindFilter.length})` : "" }}
+        </button>
+        <button
+          class="flex items-center gap-0.5 truncate text-left hover:text-foreground"
+          @click="toggleSort('size')"
+        >
+          大小{{ sortIndicator("size") }}
+        </button>
+        <button
+          class="flex items-center gap-0.5 truncate text-left hover:text-foreground"
+          @click="toggleSort('uploaded')"
+        >
+          添加时间{{ sortIndicator("uploaded") }}
+        </button>
+        <button
+          class="flex items-center gap-0.5 truncate text-left hover:text-foreground"
+          @click="toggleSort('mtime')"
+        >
+          文件时间{{ sortIndicator("mtime") }}
+        </button>
+        <button
+          class="flex items-center gap-0.5 truncate text-left hover:text-foreground"
+          :class="statusFilter.length > 0 ? 'text-foreground' : ''"
+          @click="openMenu = openMenu === 'status' ? null : 'status'"
+        >
+          状态{{ statusFilter.length > 0 ? ` (${statusFilter.length})` : "" }}
+        </button>
+        <span />
+
+        <!-- Column menus (absolute, below the header) -->
+        <div
+          v-if="openMenu === 'kind'"
+          class="absolute left-0 top-full z-30 w-40 rounded-md border bg-popover p-1 text-xs shadow-lg"
+        >
+          <p
+            class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            筛选类型
+          </p>
+          <label
+            v-for="opt in KIND_OPTIONS"
+            :key="opt.v"
+            class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-accent"
+          >
+            <input
+              type="checkbox"
+              :checked="kindFilter.includes(opt.v)"
+              class="h-3 w-3"
+              @change="toggleKindFilter(opt.v)"
+            />
+            {{ opt.label }}
+          </label>
+          <button
+            v-if="kindFilter.length > 0"
+            class="mt-1 w-full rounded px-2 py-1 text-left text-muted-foreground hover:bg-accent"
+            @click="kindFilter = []"
+          >
+            清除筛选
+          </button>
+        </div>
+
+        <div
+          v-if="openMenu === 'status'"
+          class="absolute left-0 top-full z-30 w-36 rounded-md border bg-popover p-1 text-xs shadow-lg"
+        >
+          <p
+            class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            筛选状态
+          </p>
+          <label
+            v-for="st in STATUS_OPTIONS"
+            :key="st"
+            class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-accent"
+          >
+            <input
+              type="checkbox"
+              :checked="statusFilter.includes(st)"
+              class="h-3 w-3"
+              @change="toggleStatusFilter(st)"
+            />
+            {{ st }}
+          </label>
+          <button
+            v-if="statusFilter.length > 0"
+            class="mt-1 w-full rounded px-2 py-1 text-left text-muted-foreground hover:bg-accent"
+            @click="statusFilter = []"
+          >
+            清除筛选
+          </button>
+        </div>
+
+        <!-- Name column: sort only (no filter — use search box) -->
+        <div
+          v-if="openMenu === 'name'"
+          class="absolute left-0 top-full z-30 w-36 rounded-md border bg-popover p-1 text-xs shadow-lg"
+        >
+          <button
+            class="w-full rounded px-2 py-1 text-left hover:bg-accent"
+            @click="
+              sortKey = 'name';
+              sortDir = 'asc';
+              openMenu = null;
+            "
+          >
+            按名称升序 ↑
+          </button>
+          <button
+            class="w-full rounded px-2 py-1 text-left hover:bg-accent"
+            @click="
+              sortKey = 'name';
+              sortDir = 'desc';
+              openMenu = null;
+            "
+          >
+            按名称降序 ↓
+          </button>
+        </div>
+      </div>
+
+      <!-- Scrollable body only -->
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <div v-if="assets.length > 0" class="divide-y">
+          <div
+            v-for="a in assets"
+            :key="a.id"
+            class="grid cursor-pointer grid-cols-[minmax(0,1fr)_64px_80px_96px_96px_72px_48px] items-center gap-x-2 px-4 py-2 text-sm transition-colors hover:bg-accent/30"
+            @click="openDetail(a)"
+          >
+            <span class="truncate font-medium">{{
+              a.path.split("/").pop()
+            }}</span>
+            <span>
+              <span class="rounded bg-muted px-1.5 py-0.5 text-xs">
+                {{ kindLabel(a.kind) }}
+              </span>
+            </span>
+            <span class="text-muted-foreground">{{
+              fmtSize(a.sizeBytes)
+            }}</span>
+            <span class="text-muted-foreground">{{
+              fmtTime(a.uploadedAt)
+            }}</span>
+            <span class="text-muted-foreground">{{ fmtTime(a.mtimeMs) }}</span>
+            <span class="text-xs text-muted-foreground">{{
+              a.extractionStatus
+            }}</span>
+            <span class="text-right">
+              <button
+                class="px-1 text-xs text-muted-foreground hover:text-destructive"
+                title="删除"
+                @click.stop="removeAsset(a)"
+              >
+                删除
+              </button>
+            </span>
+          </div>
+        </div>
         <p
           v-else-if="!busy"
           class="p-8 text-center text-sm text-muted-foreground"

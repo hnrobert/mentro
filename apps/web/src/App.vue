@@ -40,7 +40,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex min-h-screen">
+  <div class="flex h-screen overflow-hidden">
     <!-- Sidebar -->
     <aside
       v-if="showSidebar"
@@ -114,7 +114,7 @@ onMounted(() => {
     </aside>
 
     <!-- Main -->
-    <main class="min-w-0 flex-1">
+    <main class="min-w-0 flex-1 overflow-hidden">
       <RouterView @library-changed="refreshCount" />
     </main>
 

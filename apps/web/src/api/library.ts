@@ -62,6 +62,7 @@ export function fetchLibrary(params: {
   kind?: string;
   q?: string;
   sort?: string;
+  sortDir?: string;
   page?: number;
   pageSize?: number;
 }): Promise<{

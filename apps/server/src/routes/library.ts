@@ -127,6 +127,7 @@ export function registerLibraryRoutes(app: FastifyInstance) {
       kind?: string;
       q?: string;
       sort?: string;
+      sortDir?: string;
       page?: string;
       pageSize?: string;
     };
@@ -142,10 +143,16 @@ export function registerLibraryRoutes(app: FastifyInstance) {
     if (groupId === "ungrouped") qb.andWhere("a.group_id IS NULL");
     else if (groupId) qb.andWhere("a.group_id = :gid", { gid: groupId });
     if (kind) qb.andWhere("a.kind = :kind", { kind });
-    qb.orderBy(
-      request.query.sort === "mtime" ? "a.mtime_ms" : "a.uploaded_at",
-      "DESC",
-    )
+    const sortCol =
+      request.query.sort === "mtime"
+        ? "a.mtime_ms"
+        : request.query.sort === "size"
+          ? "a.size_bytes"
+          : request.query.sort === "name"
+            ? "a.path"
+            : "a.uploaded_at";
+    const dir = request.query.sortDir === "asc" ? "ASC" : "DESC";
+    qb.orderBy(sortCol, dir)
       .skip((page - 1) * pageSize)
       .take(pageSize);
     if (q?.trim()) {
