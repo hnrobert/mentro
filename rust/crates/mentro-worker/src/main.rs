@@ -2,6 +2,7 @@ mod error;
 mod ext;
 mod extract;
 mod kind;
+mod ocr;
 mod proto;
 mod scan;
 mod serve;

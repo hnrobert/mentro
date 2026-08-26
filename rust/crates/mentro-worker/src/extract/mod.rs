@@ -1,4 +1,6 @@
 pub mod pdf;
+pub mod pdf_layout;
+pub mod pdf_xml;
 pub mod text;
 
 use std::path::Path;

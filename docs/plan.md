@@ -158,6 +158,7 @@ mentro/
 │   ├── rust-toolchain.toml
 │   └── crates/mentro-worker/    # 详见 §7
 ├── docker/
+│   ├── ocr/                     # OCR 薄镜像：官方 PaddleX + serving 插件（已实现）
 │   └── office/                  # 可选薄镜像：FROM gotenberg + 补充字体
 ├── data/                        # 运行时数据（gitignore）
 ├── ref/                         # 本地测试语料（已 gitignore）
@@ -538,20 +539,20 @@ docker run -d --name mentro-paddle-ocr \
 
 ## 8. 提取器矩阵
 
-| 格式                            | 文本提取                                                                     | 缩略图/渲染                    | 定位粒度         | 工具                     | 阶段 |
-| ------------------------------- | ---------------------------------------------------------------------------- | ------------------------------ | ---------------- | ------------------------ | ---- |
-| txt / md / csv / json           | Rust 原生                                                                    | 无                             | whole            | —                        | M1   |
-| pdf                             | `pdftotext`（`\f` 分页）                                                     | `pdftoppm`                     | page             | poppler                  | M1   |
-| pptx                            | OOXML：presentation.xml 定序 → slides/notes 的 `a:t`                         | Gotenberg(容器)→pdf→`pdftoppm` | slide            | 自研 + Gotenberg         | M3   |
-| docx                            | OOXML：`w:t` + 标题样式                                                      | Gotenberg(容器)→pdf            | page             | 自研 + Gotenberg         | M3   |
-| xlsx                            | sharedStrings + sheet 名                                                     | 无                             | sheet            | 自研                     | M3   |
-| png / jpg / webp                | EXIF（`kamadak-exif`）                                                       | `image` crate 缩放             | whole            | Rust 原生                | M4   |
-| mp4 / mov / mkv                 | —（M6 转写）                                                                 | ffmpeg 抽帧（poster + 场景帧） | 时间段           | ffmpeg/ffprobe           | M4   |
-| mp3 / wav                       | —（M6 转写）                                                                 | 无                             | 时间             | ffprobe                  | M4   |
-| heic                            | —                                                                            | libheif                        | whole            | libheif                  | M5   |
-| epub / zip                      | zip + html 文本                                                              | 封面                           | chapter          | Rust crate               | M5   |
-| 上传压缩包（zip/tar 系/7z/rar） | 解包入池（§素材池）：zip/tar 纯 Rust，7z 用 sevenz-rust，rar 经 `7zz`/`unar` | —                              | 解包后按内容类型 | unpack 模块              | M2   |
-| 扫描版 PDF / 图片 OCR           | PaddleOCR 容器（PP-OCRv5，中英）                                             | —                              | page / whole     | docker + PaddleX serving | M5   |
+| 格式                            | 文本提取                                                                                                                                                                                                     | 缩略图/渲染                    | 定位粒度         | 工具                     | 阶段 |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------ | ---------------- | ------------------------ | ---- |
+| txt / md / csv / json           | Rust 原生                                                                                                                                                                                                    | 无                             | whole            | —                        | M1   |
+| pdf                             | **版面感知提取**（已实现）：`pdftohtml -xml` 坐标+字号 → 移植自 pdf2md 的版面分析器（行/段/多栏/阅读顺序/页眉页脚/标题层级）；每张嵌入图经 `pdfimages` 提取后**单独 OCR** 并入页文本；无文本层页整页渲染 OCR | `pdftoppm`                     | page             | poppler + PaddleOCR 容器 | M1+  |
+| pptx                            | OOXML：presentation.xml 定序 → slides/notes 的 `a:t`                                                                                                                                                         | Gotenberg(容器)→pdf→`pdftoppm` | slide            | 自研 + Gotenberg         | M3   |
+| docx                            | OOXML：`w:t` + 标题样式                                                                                                                                                                                      | Gotenberg(容器)→pdf            | page             | 自研 + Gotenberg         | M3   |
+| xlsx                            | sharedStrings + sheet 名                                                                                                                                                                                     | 无                             | sheet            | 自研                     | M3   |
+| png / jpg / webp                | EXIF（`kamadak-exif`）                                                                                                                                                                                       | `image` crate 缩放             | whole            | Rust 原生                | M4   |
+| mp4 / mov / mkv                 | —（M6 转写）                                                                                                                                                                                                 | ffmpeg 抽帧（poster + 场景帧） | 时间段           | ffmpeg/ffprobe           | M4   |
+| mp3 / wav                       | —（M6 转写）                                                                                                                                                                                                 | 无                             | 时间             | ffprobe                  | M4   |
+| heic                            | —                                                                                                                                                                                                            | libheif                        | whole            | libheif                  | M5   |
+| epub / zip                      | zip + html 文本                                                                                                                                                                                              | 封面                           | chapter          | Rust crate               | M5   |
+| 上传压缩包（zip/tar 系/7z/rar） | 解包入池（§素材池）：zip/tar 纯 Rust，7z 用 sevenz-rust，rar 经 `7zz`/`unar`                                                                                                                                 | —                              | 解包后按内容类型 | unpack 模块              | M2   |
+| 扫描版 PDF / 图片 OCR           | PaddleOCR 容器（**已实现**：薄镜像 `docker/ocr` = 官方 PaddleX + serving 插件，PP-OCRv5 中英，端点 `POST /ocr` → `rec_texts`）                                                                               | —                              | page / whole     | docker + PaddleX serving | ✅   |
 
 设计原则（沿用讨论结论）：**Rust owns the pipeline, not the formats**。每个提取器只输出统一的 Content Units；某工具渲染失真时换掉该提取器即可，不动核心。提取器带版本号（`extraction_version`），升级即全量重提取。
 

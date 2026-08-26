@@ -140,9 +140,12 @@ pub fn run() -> i32 {
     };
     {
         let mut out = io::stdout().lock();
-        if write_frame(&mut out, &encode_frame(WorkerFrame {
-            body: Some(Body::Ready(ready)),
-        }))
+        if write_frame(
+            &mut out,
+            &encode_frame(WorkerFrame {
+                body: Some(Body::Ready(ready)),
+            }),
+        )
         .is_err()
         {
             eprintln!("[worker] handshake write failed");

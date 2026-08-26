@@ -54,18 +54,11 @@ impl Ctx {
             return None;
         }
         let rel = Path::new(name);
-        if rel.is_absolute()
-            || rel
-                .components()
-                .any(|c| matches!(c, Component::ParentDir))
-        {
+        if rel.is_absolute() || rel.components().any(|c| matches!(c, Component::ParentDir)) {
             self.skipped += 1; // zip-slip attempt
             return None;
         }
-        if rel
-            .components()
-            .any(|c| c.as_os_str() == "__MACOSX")
-        {
+        if rel.components().any(|c| c.as_os_str() == "__MACOSX") {
             self.skipped += 1;
             return None;
         }
@@ -76,9 +69,7 @@ impl Ctx {
                 return None;
             }
         }
-        if self.entries >= self.max_entries
-            || self.total + declared_size as i64 > self.max_bytes
-        {
+        if self.entries >= self.max_entries || self.total + declared_size as i64 > self.max_bytes {
             self.skipped += 1;
             return None;
         }
@@ -131,12 +122,19 @@ pub fn unpack(req: &UnpackRequest) -> WorkerResult<UnpackResult> {
         )));
     }
     let dest = Path::new(&req.dest_dir);
-    std::fs::create_dir_all(dest).map_err(|e| {
-        WorkerError::invalid(format!("create {}: {e}", dest.display()))
-    })?;
+    std::fs::create_dir_all(dest)
+        .map_err(|e| WorkerError::invalid(format!("create {}: {e}", dest.display())))?;
 
-    let max_entries = if req.max_entries > 0 { req.max_entries as i64 } else { DEFAULT_MAX_ENTRIES };
-    let max_bytes = if req.max_bytes > 0 { req.max_bytes } else { DEFAULT_MAX_BYTES };
+    let max_entries = if req.max_entries > 0 {
+        req.max_entries as i64
+    } else {
+        DEFAULT_MAX_ENTRIES
+    };
+    let max_bytes = if req.max_bytes > 0 {
+        req.max_bytes
+    } else {
+        DEFAULT_MAX_BYTES
+    };
     let mut ctx = Ctx::new(dest, max_entries, max_bytes);
 
     let ext = path
@@ -153,7 +151,7 @@ pub fn unpack(req: &UnpackRequest) -> WorkerResult<UnpackResult> {
         other => {
             return Err(WorkerError::unsupported(format!(
                 "archive type .{other} not supported"
-            )))
+            )));
         }
     }
 
@@ -170,8 +168,8 @@ pub fn unpack(req: &UnpackRequest) -> WorkerResult<UnpackResult> {
 fn unpack_zip(path: &Path, ctx: &mut Ctx) -> WorkerResult<()> {
     let file = File::open(path)
         .map_err(|e| WorkerError::invalid(format!("open {}: {e}", path.display())))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| WorkerError::invalid(format!("bad zip: {e}")))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| WorkerError::invalid(format!("bad zip: {e}")))?;
 
     for i in 0..archive.len() {
         let mut entry = archive
@@ -244,16 +242,27 @@ fn unpack_rar(path: &Path, dest: &Path, ctx: &mut Ctx) -> WorkerResult<()> {
     let path_str = path.to_string_lossy().to_string();
     let out_str = dest.display().to_string();
     let candidates: Vec<(&str, Vec<String>)> = vec![
-        ("7zz", vec!["x".into(), "-y".into(), format!("-o{out_str}"), path_str.clone()]),
-        ("7z", vec!["x".into(), "-y".into(), format!("-o{out_str}"), path_str.clone()]),
         (
-            "unar",
+            "7zz",
             vec![
-                "-f".into(),
-                "-o".into(),
-                out_str.clone(),
+                "x".into(),
+                "-y".into(),
+                format!("-o{out_str}"),
                 path_str.clone(),
             ],
+        ),
+        (
+            "7z",
+            vec![
+                "x".into(),
+                "-y".into(),
+                format!("-o{out_str}"),
+                path_str.clone(),
+            ],
+        ),
+        (
+            "unar",
+            vec!["-f".into(), "-o".into(), out_str.clone(), path_str.clone()],
         ),
     ];
     for (program, args) in &candidates {
