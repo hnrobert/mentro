@@ -1,6 +1,7 @@
 import { AddFtsFilename1766000002000 } from "./1766000002000-AddFtsFilename";
 import { FtsContentful1766000001000 } from "./1766000001000-FtsContentful";
 import { IndexLog1766000003000 } from "./1766000003000-IndexLog";
+import { KnowledgeBase1766000004000 } from "./1766000004000-KnowledgeBase";
 import { Init1766000000000 } from "./1766000000000-Init";
 
 // The DataSource option is cast at the consumption site (see data-source):
@@ -11,4 +12,5 @@ export const migrations = [
   FtsContentful1766000001000,
   AddFtsFilename1766000002000,
   IndexLog1766000003000,
+  KnowledgeBase1766000004000,
 ];

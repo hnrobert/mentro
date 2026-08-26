@@ -16,6 +16,7 @@ import { registerAuthRoutes } from "./auth/routes";
 import { registerAdminRoutes } from "./admin/routes";
 import { registerSourceRoutes } from "./routes/sources";
 import { registerAssetRoutes } from "./routes/assets";
+import { registerLibraryRoutes } from "./routes/library";
 import { registerSearchRoutes } from "./routes/search";
 import { registerJobRoutes } from "./routes/jobs";
 import { registerIndexRoutes } from "./routes/index";
@@ -105,6 +106,7 @@ async function main(): Promise<void> {
   registerAdminRoutes(app, { jwtSecret });
   registerSourceRoutes(app, { worker });
   registerAssetRoutes(app);
+  registerLibraryRoutes(app);
   registerSearchRoutes(app);
   registerJobRoutes(app);
   registerIndexRoutes(app);

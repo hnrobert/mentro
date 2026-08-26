@@ -45,9 +45,20 @@ export interface ScanOutcome {
   enqueued: number;
 }
 
+export interface ScanOptions {
+  /** Upload metadata handoff: files under these path prefixes get
+   *  group/uploader stamped on their freshly created assets. */
+  pendingMeta?: Array<{
+    pathPrefix: string;
+    groupId: string | null;
+    uploader: string | null;
+  }>;
+}
+
 export async function runSourceScan(
   source: Source,
   worker: WorkerClient,
+  options: ScanOptions = {},
 ): Promise<ScanOutcome> {
   // Long walk+hash outside any transaction.
   const resp = await worker.scan(source.rootPath);
@@ -83,6 +94,9 @@ export async function runSourceScan(
 
       if (!prior) {
         const assetId = ulid();
+        const meta = options.pendingMeta?.find((p) =>
+          record.path.startsWith(p.pathPrefix),
+        );
         newAssets.push({
           id: assetId,
           sourceId: source.id,
@@ -94,6 +108,9 @@ export async function runSourceScan(
           kind,
           oversized: record.oversized,
           extractionStatus: extractable ? "pending" : "skipped",
+          groupId: meta?.groupId ?? null,
+          uploadedBy: meta?.uploader ?? null,
+          uploadedAt: new Date(),
         });
         if (extractable) {
           newJobs.push({

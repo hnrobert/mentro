@@ -48,4 +48,15 @@ export class Asset {
 
   @Column({ type: "boolean", nullable: false, default: false })
   oversized!: boolean;
+
+  @Column({ name: "group_id", type: "text", nullable: true })
+  groupId!: string | null;
+
+  /** Add time: upload moment for uploads, first-index time for mounts.
+   *  Survives re-index (mtime tracks the file's own clock). */
+  @Column({ name: "uploaded_at", type: "datetime", nullable: true })
+  uploadedAt!: Date | null;
+
+  @Column({ name: "uploaded_by", type: "text", nullable: true })
+  uploadedBy!: string | null;
 }

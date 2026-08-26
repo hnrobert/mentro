@@ -14,6 +14,26 @@ const router = createRouter({
       name: "search",
       component: () => import("@/views/SearchView.vue"),
     },
+    {
+      path: "/library",
+      name: "library",
+      component: () => import("@/views/LibraryView.vue"),
+    },
+    {
+      path: "/library/:id",
+      name: "asset-detail",
+      component: () => import("@/views/AssetDetailView.vue"),
+    },
+    {
+      path: "/settings/sources",
+      name: "settings-sources",
+      component: () => import("@/views/SettingsView.vue"),
+    },
+    {
+      path: "/settings/users",
+      name: "settings-users",
+      component: () => import("@/views/SettingsView.vue"),
+    },
   ],
 });
 

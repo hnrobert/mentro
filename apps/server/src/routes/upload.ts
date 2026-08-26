@@ -4,7 +4,8 @@ import { ulid } from "ulid";
 import type { FastifyInstance } from "fastify";
 import { create } from "@bufbuild/protobuf";
 import { UnpackRequestSchema } from "@mentro/protocol";
-import { Source } from "../db/entities";
+import { AppDataSource } from "../db/data-source";
+import { Asset, Source } from "../db/entities";
 import { runSourceScan } from "../pipeline/scan";
 import { publish } from "../bus";
 import type { WorkerClient } from "../worker/client";
@@ -50,33 +51,95 @@ export function registerUploadRoutes(
     poolSource: () => Promise<Source>;
   },
 ) {
-  app.post("/api/upload", async (request, reply) => {
-    const parts = request.files({
-      limits: { fileSize: deps.config.maxUploadBytes },
-    });
-    const outcomes: UploadOutcome[] = [];
-    const uploadRoot = path.join(
-      deps.config.dataDir,
-      "pool",
-      "_uploads",
-      monthDir(),
-    );
-    fs.mkdirSync(uploadRoot, { recursive: true });
+  app.post<{ Body?: { groupId?: string | null } }>(
+    "/api/upload",
+    async (request, reply) => {
+      const parts = request.files({
+        limits: { fileSize: deps.config.maxUploadBytes },
+      });
+      const outcomes: UploadOutcome[] = [];
+      const uploadRoot = path.join(
+        deps.config.dataDir,
+        "pool",
+        "_uploads",
+        monthDir(),
+      );
+      fs.mkdirSync(uploadRoot, { recursive: true });
 
-    for await (const part of parts) {
-      const name = safeName(part.filename);
-      const stored = path.join(uploadRoot, `${ulid()}__${name}`);
-      outcomes.push(await storePart(part.file, stored, name, deps));
-    }
+      // Uploaded files land in the selected group (or ungrouped).
+      const groupId =
+        (request.body as { groupId?: string } | undefined)?.groupId ?? null;
+      const uploader = request.user?.id ?? null;
 
-    // Rescan the pool source so unpacked/stored files get indexed.
-    const pool = await deps.poolSource();
-    void runSourceScan(pool, deps.worker)
-      .then((o) => publish({ event: "scan.finished", sourceId: pool.id, ...o }))
-      .catch((err) => console.error("[upload] pool rescan failed:", err));
+      const overwrite =
+        (request.body as { overwrite?: boolean } | undefined)?.overwrite ===
+        true;
 
-    return reply.code(201).send({ uploaded: outcomes });
-  });
+      for await (const part of parts) {
+        const name = safeName(part.filename);
+
+        // Duplicate-name check within the target group: refuse unless the
+        // client explicitly confirmed overwrite (frontend asks the user).
+        if (!overwrite) {
+          const existing = await AppDataSource.getRepository(Asset)
+            .createQueryBuilder("a")
+            .where("a.path LIKE :pattern", { pattern: `%__${name}` })
+            .andWhere("a.group_id IS :gid", { gid: groupId ?? null })
+            .getOne();
+          if (existing) {
+            return reply.code(409).send({
+              error: "duplicate",
+              fileName: name,
+              existingId: existing.id,
+            });
+          }
+        }
+
+        const stored = path.join(uploadRoot, `${ulid()}__${name}`);
+        outcomes.push(await storePart(part.file, stored, name, deps));
+        // Stamp group/uploader on the ingested asset once the pool scan
+        // registers it (setPendingGroup is consumed by the scanner).
+        setPendingGroup(stored, groupId, uploader);
+      }
+
+      // Rescan the pool source so unpacked/stored files get indexed.
+      const pool = await deps.poolSource();
+      void runSourceScan(pool, deps.worker, {
+        pendingMeta: takePendingMeta(),
+      })
+        .then((o) =>
+          publish({ event: "scan.finished", sourceId: pool.id, ...o }),
+        )
+        .catch((err) => console.error("[upload] pool rescan failed:", err));
+
+      return reply.code(201).send({ uploaded: outcomes });
+    },
+  );
+}
+
+// --- upload metadata handoff (path -> group/uploader), consumed by the
+// pool scan right after the same request writes the files. ---
+
+interface PendingMeta {
+  pathPrefix: string;
+  groupId: string | null;
+  uploader: string | null;
+}
+
+let pendingMetas: PendingMeta[] = [];
+
+function setPendingGroup(
+  storedPath: string,
+  groupId: string | null,
+  uploader: string | null,
+): void {
+  pendingMetas.push({ pathPrefix: storedPath, groupId, uploader });
+}
+
+function takePendingMeta(): PendingMeta[] {
+  const taken = pendingMetas;
+  pendingMetas = [];
+  return taken;
 }
 
 async function storePart(

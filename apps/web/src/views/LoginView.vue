@@ -65,12 +65,7 @@ async function submit() {
       <form class="flex flex-col gap-3" @submit.prevent="submit">
         <div class="flex flex-col gap-1.5">
           <Label for="username">用户名</Label>
-          <Input
-            id="username"
-            v-model="username"
-            autocomplete="username"
-            placeholder="[A-Za-z0-9_-]{3,32}"
-          />
+          <Input id="username" v-model="username" autocomplete="username" />
         </div>
         <div class="flex flex-col gap-1.5">
           <Label for="password">密码</Label>
@@ -79,7 +74,6 @@ async function submit() {
             v-model="password"
             type="password"
             autocomplete="current-password"
-            placeholder="≥ 8 位"
           />
         </div>
         <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
