@@ -184,6 +184,7 @@ export class WorkerClient {
       path: string;
       contentHash: string;
       kind: number;
+      want?: number[];
     },
     timeoutMs?: number,
   ): Promise<Response> {

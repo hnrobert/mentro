@@ -17,6 +17,8 @@ const UNIT_TYPE_BY_NUMBER = [
 ] as const;
 
 const MAX_IN_FLIGHT = Number(process.env.MENTRO_EXTRACT_CONCURRENCY ?? 4);
+/** EExtractWant.CoverThumb */
+const COVER_THUMB = 2;
 const MAX_ATTEMPTS = 3;
 const TICK_MS = 500;
 
@@ -77,11 +79,14 @@ export class Dispatcher {
     await assetRepo.update({ id: asset.id }, { extractionStatus: "running" });
 
     try {
+      const kind = kindNumber(asset.kind);
+      const want = kind === 3 || kind === 4 ? [COVER_THUMB] : []; // presentation/document
       const resp = await this.worker.extract({
         assetId: asset.id,
         path: asset.path,
         contentHash: asset.contentHash ?? "",
-        kind: kindNumber(asset.kind),
+        kind,
+        want,
       });
 
       if (resp.ok && resp.result?.case === "extractResult") {
@@ -163,8 +168,11 @@ export class Dispatcher {
         endMs: bigint | number;
         thumbPath: string;
       }>;
+      thumbs?: string[];
     },
   ): Promise<void> {
+    // Cover thumb (worker's thumbs[0]) attaches to the first unit.
+    const coverThumb = result.thumbs?.[0] ?? null;
     // Units + FTS rows land in one transaction — the per-unit FTS
     // roundtrips were the dominant cost of extraction commits. Serialized:
     // one SQLite connection cannot host concurrent transactions.
@@ -172,7 +180,7 @@ export class Dispatcher {
       const unitRepo = m.getRepository(ContentUnit);
       await ftsDeleteAsset(assetId, m);
       await unitRepo.delete({ assetId });
-      const units = result.units.map((u) => ({
+      const units = result.units.map((u, i) => ({
         id: ulid(),
         assetId,
         ordinal: u.ordinal,
@@ -181,7 +189,7 @@ export class Dispatcher {
         text: u.text || null,
         startMs: Number(u.startMs) || null,
         endMs: Number(u.endMs) || null,
-        thumbPath: u.thumbPath || null,
+        thumbPath: i === 0 ? u.thumbPath || coverThumb : u.thumbPath || null,
         metaJson: null,
       }));
       if (units.length > 0) await unitRepo.insert(units);

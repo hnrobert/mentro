@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { AppDataSource } from "../db/data-source";
 import { Asset, ContentUnit } from "../db/entities";
@@ -61,6 +62,44 @@ export function registerAssetRoutes(app: FastifyInstance) {
       );
       if (asset.mime) reply.type(asset.mime);
       return reply.send(fs.createReadStream(asset.path));
+    },
+  );
+
+  // Thumbnail for a content unit (lazy-render trigger point).
+  app.get<{ Params: { unitId: string } }>(
+    "/api/thumbs/:unitId",
+    async (request, reply) => {
+      const unit = await AppDataSource.getRepository(ContentUnit).findOneBy({
+        id: request.params.unitId,
+      });
+      if (!unit?.thumbPath) {
+        return reply.code(404).send({ error: "no thumbnail" });
+      }
+      const dataDir = process.env.MENTRO_DATA ?? "./data";
+      const file = path.join(dataDir, unit.thumbPath);
+      if (!fs.existsSync(file)) {
+        return reply.code(404).send({ error: "not rendered" });
+      }
+      reply.type("image/png");
+      return reply.send(fs.createReadStream(file));
+    },
+  );
+
+  // Rendered PDF (office -> pdf cache) for in-browser preview.
+  app.get<{ Params: { id: string } }>(
+    "/api/assets/:id/rendered",
+    async (request, reply) => {
+      const asset = await AppDataSource.getRepository(Asset).findOneBy({
+        id: request.params.id,
+      });
+      if (!asset) return reply.code(404).send({ error: "not found" });
+      const dataDir = process.env.MENTRO_DATA ?? "./data";
+      const pdf = path.join(dataDir, "render", `${asset.id}.pdf`);
+      if (!fs.existsSync(pdf)) {
+        return reply.code(404).send({ error: "not rendered" });
+      }
+      reply.type("application/pdf");
+      return reply.send(fs.createReadStream(pdf));
     },
   );
 }

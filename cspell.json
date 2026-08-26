@@ -91,6 +91,8 @@
     "protobuf",
     "qpdf",
     "Reka",
+    "rels",
+    "renderable",
     "Rescan",
     "rescan",
     "roundtrip",
@@ -100,6 +102,7 @@
     "sevenz",
     "shadcn",
     "signalr",
+    "singlefile",
     "smask",
     "soffice",
     "sqlite",
@@ -130,6 +133,7 @@
     "walkdir",
     "webp",
     "xlsx",
+    "zippers",
     "zod"
   ]
 }

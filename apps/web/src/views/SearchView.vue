@@ -15,7 +15,8 @@ const preview = ref<{ assetId: string; fileName: string; page: number } | null>(
 );
 
 function openPreview(hit: DisplayHit): void {
-  if (hit.kind !== "pdf") return; // other kinds preview in M3+
+  // PDF → in-browser viewer; Office/other → open the file inline (browser
+  // handles download; office thumbs land in the UI with the thumbs route).
   preview.value = {
     assetId: hit.assetId,
     fileName: hit.fileName,

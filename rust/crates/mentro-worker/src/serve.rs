@@ -134,6 +134,8 @@ pub fn run() -> i32 {
             ECapability::Scan as i32,
             ECapability::ExtractText as i32,
             ECapability::ExtractPdf as i32,
+            ECapability::ExtractOffice as i32,
+            ECapability::Render as i32,
             ECapability::Unpack as i32,
         ],
         tools,
