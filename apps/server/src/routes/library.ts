@@ -138,19 +138,14 @@ export function registerLibraryRoutes(app: FastifyInstance) {
       Math.max(1, Number(request.query.pageSize ?? 50) || 50),
     );
     const repo = AppDataSource.getRepository(Asset);
-    const where: Record<string, unknown> = {};
-    if (groupId === "ungrouped") where.groupId = null;
-    else if (groupId) where.groupId = groupId;
-    if (kind) where.kind = kind;
-
-    const qb = repo
-      .createQueryBuilder("a")
-      .where(where)
-      .orderBy(
-        request.query.sort === "mtime"
-          ? "a.mtime_ms DESC"
-          : "a.uploaded_at DESC",
-      )
+    const qb = repo.createQueryBuilder("a");
+    if (groupId === "ungrouped") qb.andWhere("a.group_id IS NULL");
+    else if (groupId) qb.andWhere("a.group_id = :gid", { gid: groupId });
+    if (kind) qb.andWhere("a.kind = :kind", { kind });
+    qb.orderBy(
+      request.query.sort === "mtime" ? "a.mtime_ms" : "a.uploaded_at",
+      "DESC",
+    )
       .skip((page - 1) * pageSize)
       .take(pageSize);
     if (q?.trim()) {
