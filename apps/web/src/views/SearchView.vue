@@ -6,17 +6,61 @@ import Card from "@/components/ui/Card.vue";
 import Input from "@/components/ui/Input.vue";
 import { api, logout, uploadFiles } from "@/api/client";
 import { useAuthStore } from "@/stores/auth";
+import { useSearchIndexStore } from "@/stores/searchIndex";
+import type { SearchHit } from "@/search/engine";
+import PdfPreview from "@/components/PdfPreview.vue";
 
-interface SearchHit {
+const preview = ref<{ assetId: string; fileName: string; page: number } | null>(
+  null,
+);
+
+function openPreview(hit: DisplayHit): void {
+  if (hit.kind !== "pdf") return; // other kinds preview in M3+
+  preview.value = {
+    assetId: hit.assetId,
+    fileName: hit.fileName,
+    page: hit.ordinal,
+  };
+}
+
+/** Synthesize a snippet around the first term occurrence in the text. */
+function buildSnippet(text: string, terms: string[]): SnippetPart[] {
+  if (!text) return [];
+  const norm = text.toLowerCase();
+  let idx = -1;
+  let len = 0;
+  for (const t of terms) {
+    const i = norm.indexOf(t.toLowerCase());
+    if (i >= 0 && (idx < 0 || i < idx)) {
+      idx = i;
+      len = t.length;
+    }
+  }
+  if (idx < 0) {
+    return [{ text: text.slice(0, 120), hit: false }];
+  }
+  const start = Math.max(0, idx - 40);
+  const end = Math.min(text.length, idx + len + 80);
+  const parts: SnippetPart[] = [];
+  if (start > 0) parts.push({ text: "…", hit: false });
+  parts.push({ text: text.slice(start, idx), hit: false });
+  parts.push({ text: text.slice(idx, idx + len), hit: true });
+  parts.push({ text: text.slice(idx + len, end), hit: false });
+  if (end < text.length) parts.push({ text: "…", hit: false });
+  return parts;
+}
+
+/** Render shape: engine hit + synthesized snippet parts. */
+interface DisplayHit {
   unitId: string;
   assetId: string;
   ordinal: number;
   unitType: string;
   title: string | null;
-  snippet: string | null;
   fileName: string;
   assetPath: string;
   kind: string;
+  parts: SnippetPart[];
 }
 
 interface SourceRow {
@@ -53,7 +97,7 @@ const router = useRouter();
 const auth = useAuthStore();
 
 const query = ref("");
-const hits = ref<SearchHit[]>([]);
+const hits = ref<DisplayHit[]>([]);
 const searched = ref(false);
 const busy = ref(false);
 const error = ref("");
@@ -61,20 +105,64 @@ const sources = ref<SourceRow[]>([]);
 const newSourcePath = ref("");
 const sourceMsg = ref("");
 
-const parsedHits = computed(() =>
-  hits.value.map((h) => ({ ...h, parts: parseSnippet(h.snippet) })),
-);
+const searchIndex = useSearchIndexStore();
+
+interface ServerHit {
+  unitId: string;
+  assetId: string;
+  ordinal: number;
+  unitType: string;
+  title: string | null;
+  snippet: string | null;
+  fileName: string;
+  assetPath: string;
+  kind: string;
+}
+
+function doLocalSearch(q: string): DisplayHit[] {
+  const results = searchIndex.engine.search(q);
+  return results.map((hit) => {
+    const u = hit.unit;
+    return {
+      unitId: u.id,
+      assetId: u.assetId,
+      ordinal: u.ordinal,
+      unitType: u.unitType,
+      title: u.title,
+      fileName: u.fileName,
+      assetPath: u.sourcePath,
+      kind: u.kind,
+      parts: buildSnippet(u.text ?? "", hit.terms),
+    };
+  });
+}
+
+function doServerSearchSync(hits: ServerHit[]): DisplayHit[] {
+  return hits.map((h) => ({
+    ...h,
+    parts: parseSnippet(h.snippet),
+  }));
+}
 
 async function search() {
   const q = query.value.trim();
-  if (!q) return;
-  busy.value = true;
+  if (!q) {
+    hits.value = [];
+    return;
+  }
   error.value = "";
+  if (searchIndex.ready) {
+    hits.value = doLocalSearch(q);
+    searched.value = true;
+    return;
+  }
+  // Bundle not loaded yet: server-side fallback this once.
+  busy.value = true;
   try {
-    const res = await api<{ hits: SearchHit[] }>(
+    const res = await api<{ hits: ServerHit[] }>(
       `/api/search?q=${encodeURIComponent(q)}`,
     );
-    hits.value = res.hits;
+    hits.value = doServerSearchSync(res.hits);
   } catch (err) {
     error.value = String(err);
   } finally {
@@ -165,6 +253,7 @@ async function onUpload(event: Event) {
 
 onMounted(() => {
   void loadSources();
+  void searchIndex.init();
 });
 </script>
 
@@ -233,9 +322,10 @@ onMounted(() => {
 
     <div class="space-y-2">
       <Card
-        v-for="hit in parsedHits"
+        v-for="hit in hits"
         :key="hit.unitId"
-        class="cursor-default p-3"
+        class="cursor-pointer p-3 hover:bg-accent/40"
+        @click="openPreview(hit)"
         :data-unit="hit.unitId"
       >
         <div class="mb-1 flex items-baseline justify-between gap-2">
@@ -264,5 +354,13 @@ onMounted(() => {
         </p>
       </Card>
     </div>
+
+    <PdfPreview
+      v-if="preview"
+      :asset-id="preview.assetId"
+      :file-name="preview.fileName"
+      :initial-page="preview.page"
+      @close="preview = null"
+    />
   </main>
 </template>

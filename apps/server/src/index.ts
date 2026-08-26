@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import multipart from "@fastify/multipart";
+import compress from "@fastify/compress";
 import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
 import { loadConfig, loadJwtSecret, lockDataDir } from "./config";
@@ -17,6 +18,7 @@ import { registerSourceRoutes } from "./routes/sources";
 import { registerAssetRoutes } from "./routes/assets";
 import { registerSearchRoutes } from "./routes/search";
 import { registerJobRoutes } from "./routes/jobs";
+import { registerIndexRoutes } from "./routes/index";
 import { registerWs } from "./ws";
 import { ensurePoolSource, mountEnvSources } from "./pool";
 import { registerUploadRoutes } from "./routes/upload";
@@ -66,6 +68,7 @@ async function main(): Promise<void> {
   await app.register(rateLimit, { global: false });
   await app.register(websocket);
   await app.register(multipart, { attachFieldsToBody: false });
+  await app.register(compress, { global: true });
 
   // Global auth: everything under /api/* except /api/auth/* and /api/ws.
   const guard = authGuard({ jwtSecret });
@@ -104,6 +107,7 @@ async function main(): Promise<void> {
   registerAssetRoutes(app);
   registerSearchRoutes(app);
   registerJobRoutes(app);
+  registerIndexRoutes(app);
   registerWs(app, { jwtSecret });
 
   const dispatcher = new Dispatcher(worker, {

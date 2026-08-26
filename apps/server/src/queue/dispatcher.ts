@@ -3,6 +3,8 @@ import { AppDataSource } from "../db/data-source";
 import { serializedTx } from "../db/tx";
 import { Asset, ContentUnit, Job } from "../db/entities";
 import { ftsDeleteAsset, ftsReplaceUnits } from "../search/fts";
+import { logUpserted } from "../indexbundle";
+import { publish } from "../bus";
 import type { WorkerClient } from "../worker/client";
 
 const UNIT_TYPE_BY_NUMBER = [
@@ -185,7 +187,12 @@ export class Dispatcher {
       if (units.length > 0) await unitRepo.insert(units);
       const fileName = assetPath.split("/").pop() ?? "";
       await ftsReplaceUnits(units, fileName, m);
+      await logUpserted(
+        units.map((u) => u.id),
+        m,
+      );
     });
+    publish({ event: "index.changed" });
   }
 
   private async finish(

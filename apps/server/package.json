@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.14.0",
+    "@fastify/compress": "^9.2.0",
     "@fastify/multipart": "^10.1.1",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/websocket": "^11.1.0",

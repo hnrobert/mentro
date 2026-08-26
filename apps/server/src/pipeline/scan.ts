@@ -4,6 +4,8 @@ import { AppDataSource } from "../db/data-source";
 import { serializedTx } from "../db/tx";
 import { Asset, ContentUnit, Job, Source } from "../db/entities";
 import { ftsDeleteAsset } from "../search/fts";
+import { logRemoved, unitIdsOfAsset } from "../indexbundle";
+import { publish } from "../bus";
 import type { WorkerClient } from "../worker/client";
 
 /** Numeric EAssetKind -> our kind string (keep in sync with the proto). */
@@ -30,6 +32,7 @@ export async function deleteAssetCascade(
 ): Promise<void> {
   const em = m ?? AppDataSource.manager;
   await ftsDeleteAsset(assetId, em);
+  await logRemoved(await unitIdsOfAsset(assetId, em), em);
   await em.getRepository(ContentUnit).delete({ assetId });
   await em.getRepository(Job).delete({ assetId });
   await em.getRepository(Asset).delete({ id: assetId });
@@ -58,7 +61,7 @@ export async function runSourceScan(
   // Diff + writes in ONE transaction: N records used to cost N implicit
   // transactions (a WAL fsync each) — the dominant indexing cost.
   // Serialized: single SQLite connection, no concurrent transactions.
-  return serializedTx(async (m) => {
+  const outcome = await serializedTx(async (m) => {
     const assetRepo = m.getRepository(Asset);
     const jobRepo = m.getRepository(Job);
     // Path ownership is global (uq_assets_path): the first source that saw
@@ -116,6 +119,7 @@ export async function runSourceScan(
       // Content changed: drop stale units + FTS rows, reset status.
       if (hashChanged) {
         await ftsDeleteAsset(prior.id, m);
+        await logRemoved(await unitIdsOfAsset(prior.id, m), m);
         await m.getRepository(ContentUnit).delete({ assetId: prior.id });
       }
       const nextStatus = !extractable
@@ -173,4 +177,6 @@ export async function runSourceScan(
       enqueued,
     };
   });
+  publish({ event: "index.changed" });
+  return outcome;
 }
