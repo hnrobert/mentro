@@ -192,7 +192,7 @@ pub fn extract_pptx(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
         {
             let notes = slide_text(&notes_xml);
             if !notes.trim().is_empty() {
-                text.push_str("\n\n[备注] ");
+                text.push_str("\n\n[notes] ");
                 text.push_str(&notes);
             }
         }

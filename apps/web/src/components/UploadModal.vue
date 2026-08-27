@@ -56,7 +56,7 @@ async function upload(overwrite = false): Promise<void> {
       busy.value = false;
       return;
     }
-    message.value = `已上传 ${result.uploaded.length} 个文件，正在索引…`;
+    message.value = `Uploaded ${result.uploaded.length} files, indexing…`;
     emit("uploaded");
     setTimeout(() => emit("close"), 1200);
   } catch (err) {
@@ -86,15 +86,15 @@ async function addGroup(): Promise<void> {
     @click.self="emit('close')"
   >
     <div class="w-full max-w-md rounded-xl border bg-card p-5 shadow-lg">
-      <h2 class="mb-4 text-base font-semibold">上传素材</h2>
+      <h2 class="mb-4 text-base font-semibold">Upload</h2>
 
       <div class="mb-3 flex flex-col gap-1.5">
-        <Label>目标分组</Label>
+        <Label>Target group</Label>
         <select
           v-model="selectedGroupId"
           class="h-9 rounded-md border border-input bg-background px-2 text-sm"
         >
-          <option :value="null">未分组</option>
+          <option :value="null">Ungrouped</option>
           <option v-for="g in groups" :key="g.id" :value="g.id">
             {{ g.name }}（{{ g.fileCount }}）
           </option>
@@ -104,9 +104,11 @@ async function addGroup(): Promise<void> {
       <label
         class="mb-3 flex cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-input p-6 text-sm text-muted-foreground transition-colors hover:border-ring hover:bg-accent/30"
       >
-        <span v-if="files.length === 0">点击选择文件（可多选）</span>
+        <span v-if="files.length === 0"
+          >Click to select files (multiple allowed)</span
+        >
         <span v-else class="font-medium text-foreground">
-          {{ files.length }} 个文件
+          {{ files.length }} files
         </span>
         <input type="file" multiple class="hidden" @change="pickFiles" />
       </label>
@@ -115,21 +117,23 @@ async function addGroup(): Promise<void> {
         v-if="duplicate"
         class="mb-3 rounded border border-destructive/50 bg-destructive/10 p-3 text-sm"
       >
-        <p class="font-medium">「{{ duplicate.fileName }}」已存在于该分组</p>
-        <p class="mt-1 text-muted-foreground">是否覆盖？</p>
+        <p class="font-medium">
+          「{{ duplicate.fileName }}」already exists in this group
+        </p>
+        <p class="mt-1 text-muted-foreground">Overwrite?</p>
         <div class="mt-2 flex gap-2">
           <Button size="sm" variant="destructive" @click="upload(true)">
-            覆盖上传
+            Overwrite
           </Button>
           <Button size="sm" variant="outline" @click="duplicate = null">
-            取消
+            Cancel
           </Button>
         </div>
       </div>
 
       <div v-if="showNewGroup" class="mb-3 flex gap-2">
-        <Input v-model="newGroupName" placeholder="新分组名…" />
-        <Button size="sm" variant="outline" @click="addGroup">创建</Button>
+        <Input v-model="newGroupName" placeholder="New group name…" />
+        <Button size="sm" variant="outline" @click="addGroup">Create</Button>
       </div>
 
       <p v-if="error" class="mb-3 text-sm text-destructive">{{ error }}</p>
@@ -142,16 +146,18 @@ async function addGroup(): Promise<void> {
           class="text-xs text-muted-foreground hover:underline"
           @click="showNewGroup = !showNewGroup"
         >
-          {{ showNewGroup ? "收起" : "+ 新建分组" }}
+          {{ showNewGroup ? "Collapse" : "+ New Group" }}
         </button>
         <div class="flex gap-2">
-          <Button variant="ghost" size="sm" @click="emit('close')">关闭</Button>
+          <Button variant="ghost" size="sm" @click="emit('close')"
+            >Close</Button
+          >
           <Button
             size="sm"
             :disabled="busy || files.length === 0 || !!duplicate"
             @click="upload(false)"
           >
-            {{ busy ? "上传中…" : "上传" }}
+            {{ busy ? "Uploading…" : "Upload" }}
           </Button>
         </div>
       </div>

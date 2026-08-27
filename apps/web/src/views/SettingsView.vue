@@ -70,7 +70,7 @@ async function addSource(): Promise<void> {
       body: JSON.stringify({ rootPath: p }),
     });
     newSourcePath.value = "";
-    message.value = "已添加，扫描已启动";
+    message.value = "Added, scan started";
     await loadSources();
   } catch (err) {
     message.value = String(err);
@@ -79,11 +79,16 @@ async function addSource(): Promise<void> {
 
 async function rescanSource(id: string): Promise<void> {
   await api(`/api/sources/${id}/rescan`, { method: "POST" });
-  message.value = "重扫已启动";
+  message.value = "Rescan started";
 }
 
 async function removeSource(id: string): Promise<void> {
-  if (!confirm("移除此挂载目录？已索引内容也会移除。")) return;
+  if (
+    !confirm(
+      "Remove this mount directory? Indexed content will also be removed.",
+    )
+  )
+    return;
   await api(`/api/sources/${id}`, { method: "DELETE" });
   await loadSources();
 }
@@ -97,14 +102,14 @@ async function toggleRegistration(): Promise<void> {
 }
 
 async function resetPassword(u: UserRow): Promise<void> {
-  const pw = prompt(`为「${u.username}」设置新密码（≥8 位）：`);
+  const pw = prompt(`Set a new password for "${u.username}" (min 8 chars):`);
   if (!pw) return;
   try {
     await api(`/api/admin/users/${u.id}/reset-password`, {
       method: "POST",
       body: JSON.stringify({ newPassword: pw }),
     });
-    message.value = `已重置 ${u.username} 的密码`;
+    message.value = `Reset ${u.username}  password`;
   } catch (err) {
     message.value = String(err);
   }
@@ -112,7 +117,7 @@ async function resetPassword(u: UserRow): Promise<void> {
 
 async function toggleUser(u: UserRow): Promise<void> {
   if (u.role === "super_admin" && u.enabled) {
-    alert("不能禁用超级管理员");
+    alert("Cannot disable super admin");
     return;
   }
   await api(`/api/admin/users/${u.id}`, {
@@ -124,10 +129,10 @@ async function toggleUser(u: UserRow): Promise<void> {
 
 async function removeUser(u: UserRow): Promise<void> {
   if (u.id === auth.user?.id) {
-    alert("不能删除自己");
+    alert("Cannot delete yourself");
     return;
   }
-  if (!confirm(`删除用户「${u.username}」？`)) return;
+  if (!confirm(`DeleteUsers「${u.username}"?`)) return;
   await api(`/api/admin/users/${u.id}`, { method: "DELETE" });
   await loadUsers();
 }
@@ -146,14 +151,14 @@ onMounted(() => {
         :class="tab === 'sources' ? 'bg-accent font-medium' : ''"
         @click="tab = 'sources'"
       >
-        挂载目录
+        Mounted Directories
       </button>
       <button
         class="rounded px-3 py-1.5 text-sm transition-colors hover:bg-accent"
         :class="tab === 'users' ? 'bg-accent font-medium' : ''"
         @click="tab = 'users'"
       >
-        用户
+        Users
       </button>
     </div>
     <p v-if="message" class="mb-3 text-xs text-muted-foreground">
@@ -163,8 +168,11 @@ onMounted(() => {
     <!-- Sources tab -->
     <template v-if="tab === 'sources'">
       <div class="mb-4 flex gap-2">
-        <Input v-model="newSourcePath" placeholder="服务器目录绝对路径…" />
-        <Button variant="outline" size="sm" @click="addSource">挂载</Button>
+        <Input
+          v-model="newSourcePath"
+          placeholder="Server directory absolute path…"
+        />
+        <Button variant="outline" size="sm" @click="addSource">Mount</Button>
       </div>
       <div class="space-y-2">
         <div
@@ -175,12 +183,12 @@ onMounted(() => {
           <div class="min-w-0">
             <p class="truncate font-mono text-xs">{{ s.rootPath }}</p>
             <p class="mt-0.5 text-xs text-muted-foreground">
-              {{ s.doneCount }}/{{ s.assetCount }} 已索引
+              {{ s.doneCount }}/{{ s.assetCount }} indexed
             </p>
           </div>
           <div class="flex shrink-0 gap-1">
             <Button variant="ghost" size="sm" @click="rescanSource(s.id)">
-              重扫
+              Rescan
             </Button>
             <Button
               variant="ghost"
@@ -188,7 +196,7 @@ onMounted(() => {
               class="text-destructive"
               @click="removeSource(s.id)"
             >
-              移除
+              Remove
             </Button>
           </div>
         </div>
@@ -203,7 +211,7 @@ onMounted(() => {
           :checked="allowRegistration"
           @change="toggleRegistration"
         />
-        允许新用户注册
+        Allow new user registration
       </label>
       <div class="space-y-2">
         <div
@@ -214,15 +222,15 @@ onMounted(() => {
           <div>
             <p class="font-medium">{{ u.username }}</p>
             <p class="text-xs text-muted-foreground">
-              {{ u.role }} · {{ u.enabled ? "启用" : "已禁用" }}
+              {{ u.role }} · {{ u.enabled ? "enabled" : "disabled" }}
             </p>
           </div>
           <div class="flex shrink-0 gap-1">
             <Button variant="ghost" size="sm" @click="resetPassword(u)">
-              重置密码
+              Reset Password
             </Button>
             <Button variant="ghost" size="sm" @click="toggleUser(u)">
-              {{ u.enabled ? "禁用" : "启用" }}
+              {{ u.enabled ? "Disable" : "Enable" }}
             </Button>
             <Button
               variant="ghost"
@@ -230,7 +238,7 @@ onMounted(() => {
               class="text-destructive"
               @click="removeUser(u)"
             >
-              删除
+              Delete
             </Button>
           </div>
         </div>

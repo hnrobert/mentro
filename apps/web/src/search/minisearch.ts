@@ -2,7 +2,7 @@
  * MiniSearch engine with CJK bigram tokenization.
  *
  * Chinese/Japanese/Korean runs are indexed as overlapping 2-gram tokens
- * (query "比赛规则" -> 比赛/赛规/规则, all present in a matching text);
+ * (overlapping pairs of CJK characters in the query all match);
  * a single CJK character query is matched via prefix search over the
  * bigrams starting with it. ASCII text is lowercased words. This keeps
  * segmentation entirely client-side (no jieba wasm) and self-consistent

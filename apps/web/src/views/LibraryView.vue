@@ -111,7 +111,7 @@ async function commitRename(): Promise<void> {
 }
 
 async function removeGroup(g: GroupNode): Promise<void> {
-  if (!confirm(`删除分组「${g.name}」？（仅空分组可删）`)) return;
+  if (!confirm(`DeleteGroup「${g.name}」? (must be empty)`)) return;
   try {
     await deleteGroup(g.id);
     if (selectedGroup.value === g.id) selectedGroup.value = null;
@@ -123,7 +123,9 @@ async function removeGroup(g: GroupNode): Promise<void> {
 
 async function removeAsset(a: LibraryAsset): Promise<void> {
   if (
-    !confirm(`删除「${a.path.split("/").pop()}」？此操作同时删除索引与文件。`)
+    !confirm(
+      `Delete「${a.path.split("/").pop()}"?This removes both the index and the file.`,
+    )
   )
     return;
   try {
@@ -159,14 +161,14 @@ function fmtTime(v: string | number | null): string {
 function kindLabel(k: string): string {
   const map: Record<string, string> = {
     pdf: "PDF",
-    presentation: "演示",
-    document: "文档",
-    spreadsheet: "表格",
-    image: "图片",
-    video: "视频",
-    audio: "音频",
-    text: "文本",
-    archive: "压缩包",
+    presentation: "Slides",
+    document: "Docs",
+    spreadsheet: "Sheets",
+    image: "Images",
+    video: "Videos",
+    audio: "Audio",
+    text: "Text",
+    archive: "Archives",
   };
   return map[k] ?? k;
 }
@@ -204,14 +206,14 @@ function clearMenu(): void {
 
 const KIND_OPTIONS = [
   { v: "pdf", label: "PDF" },
-  { v: "presentation", label: "演示" },
-  { v: "document", label: "文档" },
-  { v: "spreadsheet", label: "表格" },
-  { v: "image", label: "图片" },
-  { v: "video", label: "视频" },
-  { v: "audio", label: "音频" },
-  { v: "text", label: "文本" },
-  { v: "archive", label: "压缩包" },
+  { v: "presentation", label: "Slides" },
+  { v: "document", label: "Docs" },
+  { v: "spreadsheet", label: "Sheets" },
+  { v: "image", label: "Images" },
+  { v: "video", label: "Videos" },
+  { v: "audio", label: "Audio" },
+  { v: "text", label: "Text" },
+  { v: "archive", label: "Archives" },
 ];
 
 const STATUS_OPTIONS = ["done", "pending", "running", "failed", "skipped"];
@@ -248,14 +250,14 @@ onMounted(() => {
         :class="selectedGroup === null ? 'bg-accent font-medium' : ''"
         @click="selectedGroup = null"
       >
-        全部文件
+        All Files
       </button>
       <button
         class="mb-0.5 w-full rounded px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent"
         :class="selectedGroup === 'ungrouped' ? 'bg-accent font-medium' : ''"
         @click="selectedGroup = 'ungrouped'"
       >
-        未分组
+        Ungrouped
         <span class="ml-1 text-xs text-muted-foreground">{{ ungrouped }}</span>
       </button>
       <template v-for="{ g, depth } in flatten(groups)" :key="g.id">
@@ -276,14 +278,14 @@ onMounted(() => {
           <span class="ml-1 hidden shrink-0 gap-0.5 group-hover:flex">
             <button
               class="px-1 text-xs text-muted-foreground hover:text-foreground"
-              title="重命名"
+              title="Rename"
               @click.stop="startRename(g)"
             >
               ✎
             </button>
             <button
               class="px-1 text-xs text-muted-foreground hover:text-destructive"
-              title="删除"
+              title="Delete"
               @click.stop="removeGroup(g)"
             >
               ×
@@ -307,7 +309,7 @@ onMounted(() => {
         <Input
           v-model="newGroupName"
           class="h-8 text-xs"
-          placeholder="新建分组…"
+          placeholder="New group…"
         />
         <Button
           size="sm"
@@ -325,9 +327,13 @@ onMounted(() => {
       <div
         class="flex shrink-0 items-center gap-3 border-b bg-background px-4 py-2"
       >
-        <Input v-model="search" class="max-w-xs" placeholder="按文件名过滤…" />
+        <Input
+          v-model="search"
+          class="max-w-xs"
+          placeholder="Filter by filename…"
+        />
         <span class="ml-auto text-sm text-muted-foreground">
-          {{ total }} 个文件
+          {{ total }} files
         </span>
       </div>
 
@@ -340,7 +346,7 @@ onMounted(() => {
             class="flex items-center gap-0.5 truncate hover:text-foreground"
             @click="openMenu = openMenu === 'name' ? null : 'name'"
           >
-            文件名{{ sortIndicator("name") }}
+            Filename{{ sortIndicator("name") }}
             <svg
               v-if="kindFilter.length === 0 && statusFilter.length === 0"
               class="h-3 w-3 opacity-40"
@@ -368,7 +374,7 @@ onMounted(() => {
                 openMenu = null;
               "
             >
-              按名称升序 ↑
+              Sort A→Z ↑
             </button>
             <button
               class="w-full rounded px-2 py-1 text-left hover:bg-accent"
@@ -378,7 +384,7 @@ onMounted(() => {
                 openMenu = null;
               "
             >
-              按名称降序 ↓
+              Sort Z→A ↓
             </button>
           </div>
         </div>
@@ -388,7 +394,7 @@ onMounted(() => {
             :class="kindFilter.length > 0 ? 'text-foreground' : ''"
             @click="openMenu = openMenu === 'kind' ? null : 'kind'"
           >
-            类型{ kindFilter.length > 0 ? ` (${kindFilter.length})` : "" }
+            Type{ kindFilter.length > 0 ? ` (${kindFilter.length})` : "" }
           </button>
           <!-- Column menus (absolute, below the header) -->
           <div
@@ -398,7 +404,7 @@ onMounted(() => {
             <p
               class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
             >
-              筛选类型
+              Filter by type
             </p>
             <label
               v-for="opt in KIND_OPTIONS"
@@ -418,7 +424,7 @@ onMounted(() => {
               class="mt-1 w-full rounded px-2 py-1 text-left text-muted-foreground hover:bg-accent"
               @click="kindFilter = []"
             >
-              清除筛选
+              Clear filter
             </button>
           </div>
         </div>
@@ -426,19 +432,19 @@ onMounted(() => {
           class="flex items-center gap-0.5 truncate justify-center hover:text-foreground"
           @click="toggleSort('size')"
         >
-          大小{{ sortIndicator("size") }}
+          Size{{ sortIndicator("size") }}
         </button>
         <button
           class="flex items-center gap-0.5 truncate justify-center hover:text-foreground"
           @click="toggleSort('uploaded')"
         >
-          添加时间{{ sortIndicator("uploaded") }}
+          Added{{ sortIndicator("uploaded") }}
         </button>
         <button
           class="flex items-center gap-0.5 truncate justify-center hover:text-foreground"
           @click="toggleSort('mtime')"
         >
-          文件时间{{ sortIndicator("mtime") }}
+          File Time{{ sortIndicator("mtime") }}
         </button>
         <div class="relative flex min-w-0 items-center justify-center">
           <button
@@ -446,8 +452,8 @@ onMounted(() => {
             :class="statusFilter.length > 0 ? 'text-foreground' : ''"
             @click="openMenu = openMenu === 'status' ? null : 'status'"
           >
-            索引状态{ statusFilter.length > 0 ? ` (${statusFilter.length})` : ""
-            }
+            Index Status{ statusFilter.length > 0 ? ` (${statusFilter.length})`
+            : "" }
           </button>
           <div
             v-if="openMenu === 'status'"
@@ -456,7 +462,7 @@ onMounted(() => {
             <p
               class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
             >
-              筛选状态
+              Filter by status
             </p>
             <label
               v-for="st in STATUS_OPTIONS"
@@ -476,7 +482,7 @@ onMounted(() => {
               class="mt-1 w-full rounded px-2 py-1 text-left text-muted-foreground hover:bg-accent"
               @click="statusFilter = []"
             >
-              清除筛选
+              Clear filter
             </button>
           </div>
         </div>
@@ -514,10 +520,10 @@ onMounted(() => {
             <span class="text-right">
               <button
                 class="px-1 text-xs text-muted-foreground hover:text-destructive"
-                title="删除"
+                title="Delete"
                 @click.stop="removeAsset(a)"
               >
-                删除
+                Delete
               </button>
             </span>
           </div>
@@ -526,7 +532,7 @@ onMounted(() => {
           v-else-if="!busy"
           class="p-8 text-center text-sm text-muted-foreground"
         >
-          没有文件。点左下「上传素材」添加。
+          No files. Click Upload below to add some.
         </p>
       </div>
 
@@ -540,7 +546,7 @@ onMounted(() => {
           :disabled="page <= 1"
           @click="page--"
         >
-          上一页
+          Prev
         </Button>
         <span class="text-muted-foreground"
           >{{ page }} / {{ Math.ceil(total / 50) }}</span
@@ -551,7 +557,7 @@ onMounted(() => {
           :disabled="page >= Math.ceil(total / 50)"
           @click="page++"
         >
-          下一页
+          Next
         </Button>
       </div>
     </div>

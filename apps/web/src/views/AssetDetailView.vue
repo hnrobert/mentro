@@ -89,7 +89,7 @@ onMounted(() => {
 
 <template>
   <div class="mx-auto max-w-4xl p-6">
-    <p v-if="loading" class="text-sm text-muted-foreground">加载中…</p>
+    <p v-if="loading" class="text-sm text-muted-foreground">Loading…</p>
     <p v-else-if="error" class="text-sm text-destructive">{{ error }}</p>
     <template v-else-if="asset">
       <!-- Header -->
@@ -112,10 +112,10 @@ onMounted(() => {
             size="sm"
             @click="showPdf = true"
           >
-            预览
+            Preview
           </Button>
           <a :href="previewUrl()" target="_blank">
-            <Button size="sm" variant="outline">下载</Button>
+            <Button size="sm" variant="outline">Download</Button>
           </a>
         </div>
       </div>
@@ -123,32 +123,32 @@ onMounted(() => {
       <!-- Metadata -->
       <div class="mb-6 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
         <div class="rounded-lg border p-3">
-          <p class="text-xs text-muted-foreground">类型</p>
+          <p class="text-xs text-muted-foreground">Type</p>
           <p class="mt-1 font-medium">{{ asset.kind }}</p>
         </div>
         <div class="rounded-lg border p-3">
-          <p class="text-xs text-muted-foreground">大小</p>
+          <p class="text-xs text-muted-foreground">Size</p>
           <p class="mt-1 font-medium">{{ fmtSize(asset.sizeBytes) }}</p>
         </div>
         <div class="rounded-lg border p-3">
-          <p class="text-xs text-muted-foreground">索引状态</p>
+          <p class="text-xs text-muted-foreground">Index Status</p>
           <p class="mt-1 font-medium">{{ asset.extractionStatus }}</p>
         </div>
         <div class="rounded-lg border p-3 sm:col-span-2">
-          <p class="text-xs text-muted-foreground">分组</p>
+          <p class="text-xs text-muted-foreground">Group</p>
           <select
             class="mt-1 h-8 w-full rounded border border-input bg-background px-2 text-sm"
             :value="asset.groupId ?? ''"
             @change="changeGroup"
           >
-            <option value="">未分组</option>
+            <option value="">Ungrouped</option>
             <option v-for="g in flatten(groups)" :key="g.id" :value="g.id">
               {{ g.name }}
             </option>
           </select>
         </div>
         <div class="rounded-lg border p-3">
-          <p class="text-xs text-muted-foreground">添加时间</p>
+          <p class="text-xs text-muted-foreground">Added</p>
           <p class="mt-1 font-medium">
             {{
               asset.uploadedAt
@@ -161,7 +161,7 @@ onMounted(() => {
 
       <!-- Content units -->
       <h2 class="mb-2 text-sm font-semibold text-muted-foreground">
-        内容单元（{{ units.length }}）
+        Content Units（{{ units.length }}）
       </h2>
       <div class="space-y-2">
         <details
@@ -177,7 +177,7 @@ onMounted(() => {
           </summary>
           <pre
             class="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground"
-            >{{ u.text || "（无文本）" }}</pre>
+            >{{ u.text || "(no text)" }}</pre>
         </details>
       </div>
     </template>

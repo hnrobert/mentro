@@ -40,7 +40,7 @@ async function submit() {
     <Card class="w-full max-w-sm p-6">
       <h1 class="mb-1 text-xl font-semibold tracking-tight">Mentro</h1>
       <p class="mb-5 text-sm text-muted-foreground">
-        自部署的素材索引与检索服务
+        Self-hosted knowledge base
       </p>
 
       <div class="mb-4 flex rounded-md border p-0.5 text-sm">
@@ -49,7 +49,7 @@ async function submit() {
           :class="mode === 'login' ? 'bg-primary text-primary-foreground' : ''"
           @click="mode = 'login'"
         >
-          登录
+          Sign In
         </button>
         <button
           class="flex-1 rounded px-3 py-1.5 transition-colors"
@@ -58,17 +58,17 @@ async function submit() {
           "
           @click="mode = 'register'"
         >
-          注册
+          Register
         </button>
       </div>
 
       <form class="flex flex-col gap-3" @submit.prevent="submit">
         <div class="flex flex-col gap-1.5">
-          <Label for="username">用户名</Label>
+          <Label for="username">Username</Label>
           <Input id="username" v-model="username" autocomplete="username" />
         </div>
         <div class="flex flex-col gap-1.5">
-          <Label for="password">密码</Label>
+          <Label for="password">Password</Label>
           <Input
             id="password"
             v-model="password"
@@ -78,12 +78,13 @@ async function submit() {
         </div>
         <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
         <Button type="submit" :disabled="busy || !username || !password">
-          {{ mode === "login" ? "登录" : "注册并登录" }}
+          {{ mode === "login" ? "Sign In" : "Register & Sign In" }}
         </Button>
       </form>
 
       <p class="mt-4 text-xs text-muted-foreground">
-        首位注册者将成为超级管理员；注册开关由管理员在设置中控制。
+        The first registered user becomes the super admin; registration is
+        controlled by the admin in Settings.
       </p>
     </Card>
   </main>

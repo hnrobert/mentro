@@ -178,8 +178,11 @@ onMounted(() => {
   <div class="mx-auto max-w-3xl p-4 sm:p-6">
     <div class="mb-4 flex items-center gap-3">
       <form class="flex flex-1 gap-2" @submit.prevent="search">
-        <Input v-model="query" placeholder="搜索全部内容单元（页/幻灯片）…" />
-        <Button type="submit" :disabled="busy">搜索</Button>
+        <Input
+          v-model="query"
+          placeholder="Search all content units (pages/slides)…"
+        />
+        <Button type="submit" :disabled="busy">Search</Button>
       </form>
     </div>
 
@@ -192,8 +195,8 @@ onMounted(() => {
       class="mb-4 flex w-full items-center justify-between rounded-lg border px-4 py-2 text-sm transition-colors hover:bg-accent/40"
       @click="router.push({ name: 'library' })"
     >
-      <span class="text-muted-foreground">素材库</span>
-      <span class="font-medium">{{ libraryCount ?? "…" }} 个文件 →</span>
+      <span class="text-muted-foreground">Library</span>
+      <span class="font-medium">{{ libraryCount ?? "…" }} files →</span>
     </button>
 
     <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
@@ -201,7 +204,7 @@ onMounted(() => {
       v-else-if="searched && hits.length === 0"
       class="text-sm text-muted-foreground"
     >
-      没有命中。换个关键词，或去素材库上传。
+      No results. Try different keywords or upload to the library.
     </p>
 
     <div class="space-y-2">

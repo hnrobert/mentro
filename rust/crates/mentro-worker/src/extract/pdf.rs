@@ -95,7 +95,7 @@ fn extract_layout(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
                 text = if text.is_empty() {
                     ocr_text
                 } else {
-                    format!("{text}\n\n[页面OCR] {ocr_text}")
+                    format!("{text}\n\n[page OCR] {ocr_text}")
                 };
             }
         }
@@ -115,7 +115,7 @@ fn extract_layout(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
                 } else {
                     "\n\n".to_string()
                 };
-                text.push_str(&format!("{label}[图{img_idx} OCR] {ocr_text}"));
+                text.push_str(&format!("{label}[img {img_idx} OCR] {ocr_text}"));
             }
         }
 

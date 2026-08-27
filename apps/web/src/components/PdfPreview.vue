@@ -23,13 +23,13 @@ const emit = defineEmits<{ close: [] }>();
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const page = ref(Math.max(1, props.initialPage));
 const pageCount = ref(0);
-const status = ref("加载中…");
+const status = ref("Loading…");
 
 let doc: pdfjs.PDFDocumentProxy | null = null;
 let renderTask: { cancel(): void } | null = null;
 
 async function load(): Promise<void> {
-  status.value = "加载中…";
+  status.value = "Loading…";
   const auth = loadAuth();
   const res = await fetch(`/api/assets/${props.assetId}/file`, {
     headers: auth?.accessToken
@@ -37,7 +37,7 @@ async function load(): Promise<void> {
       : undefined,
   });
   if (!res.ok) {
-    status.value = `加载失败 (HTTP ${res.status})`;
+    status.value = `Failed to load (HTTP ${res.status})`;
     return;
   }
   const data = new Uint8Array(await res.arrayBuffer());
@@ -100,7 +100,7 @@ function go(delta: number): void {
           :disabled="page <= 1"
           @click="go(-1)"
         >
-          上一页
+          Prev
         </Button>
         <span>{{ page }} / {{ pageCount || "…" }}</span>
         <Button
@@ -109,9 +109,9 @@ function go(delta: number): void {
           :disabled="page >= pageCount"
           @click="go(1)"
         >
-          下一页
+          Next
         </Button>
-        <Button variant="ghost" size="sm" @click="emit('close')">关闭</Button>
+        <Button variant="ghost" size="sm" @click="emit('close')">Close</Button>
       </div>
     </div>
     <div class="flex flex-1 items-center justify-center overflow-auto p-4">

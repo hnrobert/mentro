@@ -55,14 +55,14 @@ onMounted(() => {
           :class="route.name === 'search' ? 'bg-accent font-medium' : ''"
           @click="nav('search')"
         >
-          搜索
+          Search
         </button>
         <button
           class="rounded px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
           :class="route.name === 'library' ? 'bg-accent font-medium' : ''"
           @click="nav('library')"
         >
-          素材库
+          Library
           <span
             v-if="totalCount !== null"
             class="ml-1 text-xs text-muted-foreground"
@@ -80,7 +80,7 @@ onMounted(() => {
           "
           @click="nav('settings-sources')"
         >
-          设置
+          Settings
         </button>
       </nav>
       <div class="border-t p-3">
@@ -88,7 +88,7 @@ onMounted(() => {
           class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent"
           @click="uploadOpen = true"
         >
-          上传素材
+          Upload
         </button>
         <div
           v-if="auth.user"
@@ -107,7 +107,7 @@ onMounted(() => {
               }
             "
           >
-            退出
+            Sign Out
           </button>
         </div>
       </div>
