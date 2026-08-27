@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
@@ -33,6 +33,73 @@ const busy = ref(false);
 const newGroupName = ref("");
 const showInput = ref<string | null>(null); // group id being renamed
 const renameValue = ref("");
+
+// --- Resizable columns ---
+// Column keys match the data row order: filename, type, size, added, fileTime, status, actions
+interface ColDef {
+  key: string;
+  width: number;
+  min: number;
+  /** The last column (actions) has no resizer */
+  resizable: boolean;
+}
+
+const cols = ref<ColDef[]>([
+  { key: "name", width: 0, min: 120, resizable: true }, // 0 = flex (1fr)
+  { key: "kind", width: 64, min: 48, resizable: true },
+  { key: "size", width: 80, min: 56, resizable: true },
+  { key: "uploaded", width: 96, min: 64, resizable: true },
+  { key: "mtime", width: 96, min: 64, resizable: true },
+  { key: "status", width: 72, min: 56, resizable: true },
+  { key: "actions", width: 48, min: 48, resizable: false },
+]);
+
+const gridTemplate = computed(() =>
+  cols.value
+    .map((c) => (c.width === 0 ? "minmax(0,1fr)" : `${c.width}px`))
+    .join(" "),
+);
+
+const gridStyle = computed(() => ({
+  gridTemplateColumns: gridTemplate.value,
+}));
+
+let resizeCol: number | null = null;
+let resizeStartX = 0;
+let resizeStartW = 0;
+
+function startResize(event: MouseEvent, index: number): void {
+  event.preventDefault();
+  event.stopPropagation();
+  resizeCol = index;
+  resizeStartX = event.clientX;
+  resizeStartW = cols.value[index].width || 120;
+  document.addEventListener("mousemove", onResize);
+  document.addEventListener("mouseup", stopResize);
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+}
+
+function onResize(event: MouseEvent): void {
+  if (resizeCol === null) return;
+  const delta = event.clientX - resizeStartX;
+  const col = cols.value[resizeCol];
+  const newW = Math.max(col.min, resizeStartW + delta);
+  // If the flex column is being resized, switch it to fixed
+  if (col.width === 0 && delta > 0) {
+    col.width = resizeStartW + delta;
+  } else {
+    col.width = newW;
+  }
+}
+
+function stopResize(): void {
+  resizeCol = null;
+  document.removeEventListener("mousemove", onResize);
+  document.removeEventListener("mouseup", stopResize);
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
+}
 
 async function loadGroups(): Promise<void> {
   const tree = await fetchGroups();
@@ -111,7 +178,7 @@ async function commitRename(): Promise<void> {
 }
 
 async function removeGroup(g: GroupNode): Promise<void> {
-  if (!confirm(`DeleteGroup「${g.name}」? (must be empty)`)) return;
+  if (!confirm(`Delete group "${g.name}"? (must be empty)`)) return;
   try {
     await deleteGroup(g.id);
     if (selectedGroup.value === g.id) selectedGroup.value = null;
@@ -124,7 +191,7 @@ async function removeGroup(g: GroupNode): Promise<void> {
 async function removeAsset(a: LibraryAsset): Promise<void> {
   if (
     !confirm(
-      `Delete「${a.path.split("/").pop()}"?This removes both the index and the file.`,
+      `Delete "${a.path.split("/").pop()}"? This removes both the index and the file.`,
     )
   )
     return;
@@ -235,6 +302,8 @@ function flatten(
   return out;
 }
 
+onUnmounted(() => stopResize());
+
 onMounted(() => {
   void loadGroups();
   void loadAssets();
@@ -243,7 +312,7 @@ onMounted(() => {
 
 <template>
   <div class="flex h-full">
-    <!-- Group tree -->
+    <!-- Group tree sidebar -->
     <div class="w-56 shrink-0 overflow-y-auto border-r p-3">
       <button
         class="mb-0.5 w-full rounded px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent"
@@ -281,14 +350,14 @@ onMounted(() => {
               title="Rename"
               @click.stop="startRename(g)"
             >
-              ✎
+              E
             </button>
             <button
               class="px-1 text-xs text-muted-foreground hover:text-destructive"
               title="Delete"
               @click.stop="removeGroup(g)"
             >
-              ×
+              x
             </button>
           </span>
         </div>
@@ -300,7 +369,7 @@ onMounted(() => {
             @keyup.esc="showInput = null"
           />
           <Button size="sm" class="h-7 px-2 text-xs" @click="commitRename">
-            ✓
+            OK
           </Button>
         </div>
       </template>
@@ -309,7 +378,7 @@ onMounted(() => {
         <Input
           v-model="newGroupName"
           class="h-8 text-xs"
-          placeholder="New group…"
+          placeholder="New group..."
         />
         <Button
           size="sm"
@@ -322,179 +391,213 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- File list -->
+    <!-- Right panel: filter bar + scrollable table (header + rows) -->
     <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <!-- Filter bar (fixed, above scroll area) -->
       <div
         class="flex shrink-0 items-center gap-3 border-b bg-background px-4 py-2"
       >
         <Input
           v-model="search"
           class="max-w-xs"
-          placeholder="Filter by filename…"
+          placeholder="Filter by filename..."
         />
         <span class="ml-auto text-sm text-muted-foreground">
           {{ total }} files
         </span>
       </div>
 
-      <!-- Fixed header (outside the scroll area) with per-column menus -->
-      <div
-        class="relative grid shrink-0 grid-cols-[minmax(0,1fr)_64px_80px_96px_96px_72px_48px] gap-x-2 border-b bg-muted px-4 py-2 text-xs font-medium text-muted-foreground"
-      >
-        <div class="relative flex min-w-0 items-center">
-          <button
-            class="flex items-center gap-0.5 truncate hover:text-foreground"
-            @click="openMenu = openMenu === 'name' ? null : 'name'"
-          >
-            Filename{{ sortIndicator("name") }}
-            <svg
-              v-if="kindFilter.length === 0 && statusFilter.length === 0"
-              class="h-3 w-3 opacity-40"
-              viewBox="0 0 16 16"
-              fill="currentColor"
-            >
-              <path
-                d="M4 6l4 4 4-4"
-                stroke="currentColor"
-                stroke-width="1.5"
-                fill="none"
-              />
-            </svg>
-          </button>
-          <!-- Name column: sort only (no filter — use search box) -->
-          <div
-            v-if="openMenu === 'name'"
-            class="absolute left-0 top-full z-30 mt-1 w-36 rounded-md border bg-card p-1 text-xs shadow-lg"
-          >
-            <button
-              class="w-full rounded px-2 py-1 text-left hover:bg-accent"
-              @click="
-                sortKey = 'name';
-                sortDir = 'asc';
-                openMenu = null;
-              "
-            >
-              Sort A→Z ↑
-            </button>
-            <button
-              class="w-full rounded px-2 py-1 text-left hover:bg-accent"
-              @click="
-                sortKey = 'name';
-                sortDir = 'desc';
-                openMenu = null;
-              "
-            >
-              Sort Z→A ↓
-            </button>
-          </div>
-        </div>
-        <div class="relative flex min-w-0 items-center justify-center">
-          <button
-            class="flex items-center gap-0.5 truncate hover:text-foreground"
-            :class="kindFilter.length > 0 ? 'text-foreground' : ''"
-            @click="openMenu = openMenu === 'kind' ? null : 'kind'"
-          >
-            Type{ kindFilter.length > 0 ? ` (${kindFilter.length})` : "" }
-          </button>
-          <!-- Column menus (absolute, below the header) -->
-          <div
-            v-if="openMenu === 'kind'"
-            class="absolute left-0 top-full z-30 mt-1 w-40 rounded-md border bg-card p-1 text-xs shadow-lg"
-          >
-            <p
-              class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
-            >
-              Filter by type
-            </p>
-            <label
-              v-for="opt in KIND_OPTIONS"
-              :key="opt.v"
-              class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-accent"
-            >
-              <input
-                type="checkbox"
-                :checked="kindFilter.includes(opt.v)"
-                class="h-3 w-3"
-                @change="toggleKindFilter(opt.v)"
-              />
-              {{ opt.label }}
-            </label>
-            <button
-              v-if="kindFilter.length > 0"
-              class="mt-1 w-full rounded px-2 py-1 text-left text-muted-foreground hover:bg-accent"
-              @click="kindFilter = []"
-            >
-              Clear filter
-            </button>
-          </div>
-        </div>
-        <button
-          class="flex items-center gap-0.5 truncate justify-center hover:text-foreground"
-          @click="toggleSort('size')"
+      <!-- Scrollable area: header and rows scroll together (X and Y) -->
+      <div class="min-h-0 flex-1 overflow-auto">
+        <!-- Sticky header (stays visible during vertical scroll) -->
+        <div
+          class="sticky top-0 z-10 grid min-w-fit gap-x-2 border-b bg-muted px-4 py-2 text-xs font-medium text-muted-foreground shadow-sm"
+          :style="gridStyle"
         >
-          Size{{ sortIndicator("size") }}
-        </button>
-        <button
-          class="flex items-center gap-0.5 truncate justify-center hover:text-foreground"
-          @click="toggleSort('uploaded')"
-        >
-          Added{{ sortIndicator("uploaded") }}
-        </button>
-        <button
-          class="flex items-center gap-0.5 truncate justify-center hover:text-foreground"
-          @click="toggleSort('mtime')"
-        >
-          File Time{{ sortIndicator("mtime") }}
-        </button>
-        <div class="relative flex min-w-0 items-center justify-center">
-          <button
-            class="flex items-center gap-0.5 truncate hover:text-foreground"
-            :class="statusFilter.length > 0 ? 'text-foreground' : ''"
-            @click="openMenu = openMenu === 'status' ? null : 'status'"
-          >
-            Index Status{ statusFilter.length > 0 ? ` (${statusFilter.length})`
-            : "" }
-          </button>
-          <div
-            v-if="openMenu === 'status'"
-            class="absolute left-0 top-full z-30 mt-1 w-36 rounded-md border bg-card p-1 text-xs shadow-lg"
-          >
-            <p
-              class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
-            >
-              Filter by status
-            </p>
-            <label
-              v-for="st in STATUS_OPTIONS"
-              :key="st"
-              class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-accent"
-            >
-              <input
-                type="checkbox"
-                :checked="statusFilter.includes(st)"
-                class="h-3 w-3"
-                @change="toggleStatusFilter(st)"
-              />
-              {{ st }}
-            </label>
+          <!-- Col 1: Filename (left-aligned, menu) -->
+          <div class="relative flex min-w-0 items-center">
             <button
-              v-if="statusFilter.length > 0"
-              class="mt-1 w-full rounded px-2 py-1 text-left text-muted-foreground hover:bg-accent"
-              @click="statusFilter = []"
+              class="flex items-center gap-0.5 truncate hover:text-foreground"
+              @click="openMenu = openMenu === 'name' ? null : 'name'"
             >
-              Clear filter
+              Filename{{ sortIndicator("name") }}
             </button>
+            <div
+              v-if="openMenu === 'name'"
+              class="absolute left-0 top-full z-30 mt-1 w-36 rounded-md border bg-card p-1 text-xs shadow-lg"
+            >
+              <button
+                class="w-full rounded px-2 py-1 text-left hover:bg-accent"
+                @click="
+                  sortKey = 'name';
+                  sortDir = 'asc';
+                  openMenu = null;
+                "
+              >
+                Sort A-Z
+              </button>
+              <button
+                class="w-full rounded px-2 py-1 text-left hover:bg-accent"
+                @click="
+                  sortKey = 'name';
+                  sortDir = 'desc';
+                  openMenu = null;
+                "
+              >
+                Sort Z-A
+              </button>
+            </div>
+            <div
+              class="absolute right-0 top-0 z-20 h-full w-1.5 cursor-col-resize select-none hover:bg-foreground/20 active:bg-foreground/30"
+              @mousedown="startResize($event, 0)"
+            />
           </div>
-        </div>
-      </div>
 
-      <!-- Scrollable body only -->
-      <div class="min-h-0 flex-1 overflow-y-auto">
-        <div v-if="assets.length > 0" class="divide-y">
+          <!-- Col 2: Type (centered, filter menu) -->
+          <div class="relative flex min-w-0 items-center justify-center">
+            <button
+              class="flex items-center gap-0.5 truncate hover:text-foreground"
+              :class="kindFilter.length > 0 ? 'text-foreground' : ''"
+              @click="openMenu = openMenu === 'kind' ? null : 'kind'"
+            >
+              Type{{ kindFilter.length > 0 ? ` (${kindFilter.length})` : "" }}
+            </button>
+            <div
+              v-if="openMenu === 'kind'"
+              class="absolute left-0 top-full z-30 mt-1 w-40 rounded-md border bg-card p-1 text-xs shadow-lg"
+            >
+              <p
+                class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+              >
+                Filter by type
+              </p>
+              <label
+                v-for="opt in KIND_OPTIONS"
+                :key="opt.v"
+                class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-accent"
+              >
+                <input
+                  type="checkbox"
+                  :checked="kindFilter.includes(opt.v)"
+                  class="h-3 w-3"
+                  @change="toggleKindFilter(opt.v)"
+                />
+                {{ opt.label }}
+              </label>
+              <button
+                v-if="kindFilter.length > 0"
+                class="mt-1 w-full rounded px-2 py-1 text-left text-muted-foreground hover:bg-accent"
+                @click="kindFilter = []"
+              >
+                Clear filter
+              </button>
+            </div>
+            <div
+              class="absolute right-0 top-0 z-20 h-full w-1.5 cursor-col-resize select-none hover:bg-foreground/20 active:bg-foreground/30"
+              @mousedown="startResize($event, 1)"
+            />
+          </div>
+
+          <!-- Col 3: Size (centered, sort) -->
+          <div class="relative flex min-w-0 items-center justify-center">
+            <button
+              class="flex items-center gap-0.5 truncate hover:text-foreground"
+              @click="toggleSort('size')"
+            >
+              Size{{ sortIndicator("size") }}
+            </button>
+            <div
+              class="absolute right-0 top-0 z-20 h-full w-1.5 cursor-col-resize select-none hover:bg-foreground/20 active:bg-foreground/30"
+              @mousedown="startResize($event, 2)"
+            />
+          </div>
+
+          <!-- Col 4: Added (centered, sort) -->
+          <div class="relative flex min-w-0 items-center justify-center">
+            <button
+              class="flex items-center gap-0.5 truncate hover:text-foreground"
+              @click="toggleSort('uploaded')"
+            >
+              Added{{ sortIndicator("uploaded") }}
+            </button>
+            <div
+              class="absolute right-0 top-0 z-20 h-full w-1.5 cursor-col-resize select-none hover:bg-foreground/20 active:bg-foreground/30"
+              @mousedown="startResize($event, 3)"
+            />
+          </div>
+
+          <!-- Col 5: File Time (centered, sort) -->
+          <div class="relative flex min-w-0 items-center justify-center">
+            <button
+              class="flex items-center gap-0.5 truncate hover:text-foreground"
+              @click="toggleSort('mtime')"
+            >
+              File Time{{ sortIndicator("mtime") }}
+            </button>
+            <div
+              class="absolute right-0 top-0 z-20 h-full w-1.5 cursor-col-resize select-none hover:bg-foreground/20 active:bg-foreground/30"
+              @mousedown="startResize($event, 4)"
+            />
+          </div>
+
+          <!-- Col 6: Index Status (centered, filter menu) -->
+          <div class="relative flex min-w-0 items-center justify-center">
+            <button
+              class="flex items-center gap-0.5 truncate hover:text-foreground"
+              :class="statusFilter.length > 0 ? 'text-foreground' : ''"
+              @click="openMenu = openMenu === 'status' ? null : 'status'"
+            >
+              Index Status{{
+                statusFilter.length > 0 ? ` (${statusFilter.length})` : ""
+              }}
+            </button>
+            <div
+              v-if="openMenu === 'status'"
+              class="absolute left-0 top-full z-30 mt-1 w-36 rounded-md border bg-card p-1 text-xs shadow-lg"
+            >
+              <p
+                class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+              >
+                Filter by status
+              </p>
+              <label
+                v-for="st in STATUS_OPTIONS"
+                :key="st"
+                class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-accent"
+              >
+                <input
+                  type="checkbox"
+                  :checked="statusFilter.includes(st)"
+                  class="h-3 w-3"
+                  @change="toggleStatusFilter(st)"
+                />
+                {{ st }}
+              </label>
+              <button
+                v-if="statusFilter.length > 0"
+                class="mt-1 w-full rounded px-2 py-1 text-left text-muted-foreground hover:bg-accent"
+                @click="statusFilter = []"
+              >
+                Clear filter
+              </button>
+            </div>
+            <div
+              class="absolute right-0 top-0 z-20 h-full w-1.5 cursor-col-resize select-none hover:bg-foreground/20 active:bg-foreground/30"
+              @mousedown="startResize($event, 5)"
+            />
+          </div>
+
+          <!-- Col 7: Actions (no resizer) -->
+          <span />
+        </div>
+
+        <!-- Data rows -->
+        <div v-if="assets.length > 0" class="min-w-fit divide-y">
           <div
             v-for="a in assets"
             :key="a.id"
-            class="grid cursor-pointer grid-cols-[minmax(0,1fr)_64px_80px_96px_96px_72px_48px] items-center gap-x-2 px-4 py-2 text-sm transition-colors hover:bg-accent/30"
+            class="grid cursor-pointer items-center gap-x-2 px-4 py-2 text-sm transition-colors hover:bg-accent/30"
+            :style="gridStyle"
             @click="openDetail(a)"
           >
             <span class="truncate font-medium">{{
@@ -505,16 +608,16 @@ onMounted(() => {
                 {{ kindLabel(a.kind) }}
               </span>
             </span>
-            <span class="text-center text-muted-foreground">{{
+            <span class="flex justify-center text-muted-foreground">{{
               fmtSize(a.sizeBytes)
             }}</span>
-            <span class="text-center text-muted-foreground">{{
+            <span class="flex justify-center text-muted-foreground">{{
               fmtTime(a.uploadedAt)
             }}</span>
-            <span class="text-center text-muted-foreground">{{
+            <span class="flex justify-center text-muted-foreground">{{
               fmtTime(a.mtimeMs)
             }}</span>
-            <span class="text-center text-xs text-muted-foreground">{{
+            <span class="flex justify-center text-xs text-muted-foreground">{{
               a.extractionStatus
             }}</span>
             <span class="text-right">
@@ -536,6 +639,7 @@ onMounted(() => {
         </p>
       </div>
 
+      <!-- Pagination (fixed, below scroll area) -->
       <div
         v-if="total > 50"
         class="flex items-center justify-center gap-3 border-t py-2 text-sm"
