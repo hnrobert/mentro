@@ -333,150 +333,152 @@ onMounted(() => {
 
       <!-- Fixed header (outside the scroll area) with per-column menus -->
       <div
-        class="relative grid shrink-0 grid-cols-[minmax(0,1fr)_64px_80px_96px_96px_72px_48px] gap-x-2 border-b bg-muted px-4 py-2 text-left text-xs font-medium text-muted-foreground"
-        @mouseleave="openMenu = null"
+        class="relative grid shrink-0 grid-cols-[minmax(0,1fr)_64px_80px_96px_96px_72px_48px] gap-x-2 border-b bg-muted px-4 py-2 text-xs font-medium text-muted-foreground"
       >
-        <button
-          class="flex items-center gap-0.5 truncate text-left hover:text-foreground"
-          @click="openMenu = openMenu === 'name' ? null : 'name'"
-        >
-          文件名{{ sortIndicator("name") }}
-          <svg
-            v-if="kindFilter.length === 0 && statusFilter.length === 0"
-            class="h-3 w-3 opacity-40"
-            viewBox="0 0 16 16"
-            fill="currentColor"
+        <div class="relative flex min-w-0 items-center">
+          <button
+            class="flex items-center gap-0.5 truncate hover:text-foreground"
+            @click="openMenu = openMenu === 'name' ? null : 'name'"
           >
-            <path
-              d="M4 6l4 4 4-4"
-              stroke="currentColor"
-              stroke-width="1.5"
-              fill="none"
-            />
-          </svg>
-        </button>
+            文件名{{ sortIndicator("name") }}
+            <svg
+              v-if="kindFilter.length === 0 && statusFilter.length === 0"
+              class="h-3 w-3 opacity-40"
+              viewBox="0 0 16 16"
+              fill="currentColor"
+            >
+              <path
+                d="M4 6l4 4 4-4"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+            </svg>
+          </button>
+          <!-- Name column: sort only (no filter — use search box) -->
+          <div
+            v-if="openMenu === 'name'"
+            class="absolute left-0 top-full z-30 mt-1 w-36 rounded-md border bg-card p-1 text-xs shadow-lg"
+          >
+            <button
+              class="w-full rounded px-2 py-1 text-left hover:bg-accent"
+              @click="
+                sortKey = 'name';
+                sortDir = 'asc';
+                openMenu = null;
+              "
+            >
+              按名称升序 ↑
+            </button>
+            <button
+              class="w-full rounded px-2 py-1 text-left hover:bg-accent"
+              @click="
+                sortKey = 'name';
+                sortDir = 'desc';
+                openMenu = null;
+              "
+            >
+              按名称降序 ↓
+            </button>
+          </div>
+        </div>
+        <div class="relative flex min-w-0 items-center justify-center">
+          <button
+            class="flex items-center gap-0.5 truncate hover:text-foreground"
+            :class="kindFilter.length > 0 ? 'text-foreground' : ''"
+            @click="openMenu = openMenu === 'kind' ? null : 'kind'"
+          >
+            类型{ kindFilter.length > 0 ? ` (${kindFilter.length})` : "" }
+          </button>
+          <!-- Column menus (absolute, below the header) -->
+          <div
+            v-if="openMenu === 'kind'"
+            class="absolute left-0 top-full z-30 mt-1 w-40 rounded-md border bg-card p-1 text-xs shadow-lg"
+          >
+            <p
+              class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+            >
+              筛选类型
+            </p>
+            <label
+              v-for="opt in KIND_OPTIONS"
+              :key="opt.v"
+              class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-accent"
+            >
+              <input
+                type="checkbox"
+                :checked="kindFilter.includes(opt.v)"
+                class="h-3 w-3"
+                @change="toggleKindFilter(opt.v)"
+              />
+              {{ opt.label }}
+            </label>
+            <button
+              v-if="kindFilter.length > 0"
+              class="mt-1 w-full rounded px-2 py-1 text-left text-muted-foreground hover:bg-accent"
+              @click="kindFilter = []"
+            >
+              清除筛选
+            </button>
+          </div>
+        </div>
         <button
-          class="flex items-center gap-0.5 truncate text-left hover:text-foreground"
-          :class="kindFilter.length > 0 ? 'text-foreground' : ''"
-          @click="openMenu = openMenu === 'kind' ? null : 'kind'"
-        >
-          类型{{ kindFilter.length > 0 ? ` (${kindFilter.length})` : "" }}
-        </button>
-        <button
-          class="flex items-center gap-0.5 truncate text-left hover:text-foreground"
+          class="flex items-center gap-0.5 truncate justify-center hover:text-foreground"
           @click="toggleSort('size')"
         >
           大小{{ sortIndicator("size") }}
         </button>
         <button
-          class="flex items-center gap-0.5 truncate text-left hover:text-foreground"
+          class="flex items-center gap-0.5 truncate justify-center hover:text-foreground"
           @click="toggleSort('uploaded')"
         >
           添加时间{{ sortIndicator("uploaded") }}
         </button>
         <button
-          class="flex items-center gap-0.5 truncate text-left hover:text-foreground"
+          class="flex items-center gap-0.5 truncate justify-center hover:text-foreground"
           @click="toggleSort('mtime')"
         >
           文件时间{{ sortIndicator("mtime") }}
         </button>
-        <button
-          class="flex items-center gap-0.5 truncate text-left hover:text-foreground"
-          :class="statusFilter.length > 0 ? 'text-foreground' : ''"
-          @click="openMenu = openMenu === 'status' ? null : 'status'"
-        >
-          状态{{ statusFilter.length > 0 ? ` (${statusFilter.length})` : "" }}
-        </button>
-        <span />
-
-        <!-- Column menus (absolute, below the header) -->
-        <div
-          v-if="openMenu === 'kind'"
-          class="absolute left-0 top-full z-30 w-40 rounded-md border bg-popover p-1 text-xs shadow-lg"
-        >
-          <p
-            class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
-          >
-            筛选类型
-          </p>
-          <label
-            v-for="opt in KIND_OPTIONS"
-            :key="opt.v"
-            class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-accent"
-          >
-            <input
-              type="checkbox"
-              :checked="kindFilter.includes(opt.v)"
-              class="h-3 w-3"
-              @change="toggleKindFilter(opt.v)"
-            />
-            {{ opt.label }}
-          </label>
+        <div class="relative flex min-w-0 items-center justify-center">
           <button
-            v-if="kindFilter.length > 0"
-            class="mt-1 w-full rounded px-2 py-1 text-left text-muted-foreground hover:bg-accent"
-            @click="kindFilter = []"
+            class="flex items-center gap-0.5 truncate hover:text-foreground"
+            :class="statusFilter.length > 0 ? 'text-foreground' : ''"
+            @click="openMenu = openMenu === 'status' ? null : 'status'"
           >
-            清除筛选
+            索引状态{ statusFilter.length > 0 ? ` (${statusFilter.length})` : ""
+            }
           </button>
-        </div>
-
-        <div
-          v-if="openMenu === 'status'"
-          class="absolute left-0 top-full z-30 w-36 rounded-md border bg-popover p-1 text-xs shadow-lg"
-        >
-          <p
-            class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          <div
+            v-if="openMenu === 'status'"
+            class="absolute left-0 top-full z-30 mt-1 w-36 rounded-md border bg-card p-1 text-xs shadow-lg"
           >
-            筛选状态
-          </p>
-          <label
-            v-for="st in STATUS_OPTIONS"
-            :key="st"
-            class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-accent"
-          >
-            <input
-              type="checkbox"
-              :checked="statusFilter.includes(st)"
-              class="h-3 w-3"
-              @change="toggleStatusFilter(st)"
-            />
-            {{ st }}
-          </label>
-          <button
-            v-if="statusFilter.length > 0"
-            class="mt-1 w-full rounded px-2 py-1 text-left text-muted-foreground hover:bg-accent"
-            @click="statusFilter = []"
-          >
-            清除筛选
-          </button>
-        </div>
-
-        <!-- Name column: sort only (no filter — use search box) -->
-        <div
-          v-if="openMenu === 'name'"
-          class="absolute left-0 top-full z-30 w-36 rounded-md border bg-popover p-1 text-xs shadow-lg"
-        >
-          <button
-            class="w-full rounded px-2 py-1 text-left hover:bg-accent"
-            @click="
-              sortKey = 'name';
-              sortDir = 'asc';
-              openMenu = null;
-            "
-          >
-            按名称升序 ↑
-          </button>
-          <button
-            class="w-full rounded px-2 py-1 text-left hover:bg-accent"
-            @click="
-              sortKey = 'name';
-              sortDir = 'desc';
-              openMenu = null;
-            "
-          >
-            按名称降序 ↓
-          </button>
+            <p
+              class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+            >
+              筛选状态
+            </p>
+            <label
+              v-for="st in STATUS_OPTIONS"
+              :key="st"
+              class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-accent"
+            >
+              <input
+                type="checkbox"
+                :checked="statusFilter.includes(st)"
+                class="h-3 w-3"
+                @change="toggleStatusFilter(st)"
+              />
+              {{ st }}
+            </label>
+            <button
+              v-if="statusFilter.length > 0"
+              class="mt-1 w-full rounded px-2 py-1 text-left text-muted-foreground hover:bg-accent"
+              @click="statusFilter = []"
+            >
+              清除筛选
+            </button>
+          </div>
         </div>
       </div>
 
@@ -492,19 +494,21 @@ onMounted(() => {
             <span class="truncate font-medium">{{
               a.path.split("/").pop()
             }}</span>
-            <span>
+            <span class="flex justify-center">
               <span class="rounded bg-muted px-1.5 py-0.5 text-xs">
                 {{ kindLabel(a.kind) }}
               </span>
             </span>
-            <span class="text-muted-foreground">{{
+            <span class="text-center text-muted-foreground">{{
               fmtSize(a.sizeBytes)
             }}</span>
-            <span class="text-muted-foreground">{{
+            <span class="text-center text-muted-foreground">{{
               fmtTime(a.uploadedAt)
             }}</span>
-            <span class="text-muted-foreground">{{ fmtTime(a.mtimeMs) }}</span>
-            <span class="text-xs text-muted-foreground">{{
+            <span class="text-center text-muted-foreground">{{
+              fmtTime(a.mtimeMs)
+            }}</span>
+            <span class="text-center text-xs text-muted-foreground">{{
               a.extractionStatus
             }}</span>
             <span class="text-right">
