@@ -12,6 +12,11 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      "/api/ws": {
+        target: "ws://127.0.0.1:37797",
+        ws: true,
+        rewriteWsOrigin: true,
+      },
       "/api": "http://127.0.0.1:37797",
     },
   },
