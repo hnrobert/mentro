@@ -161,6 +161,22 @@ export function registerLibraryRoutes(app: FastifyInstance) {
       });
     }
     const [items, total] = await qb.getManyAndCount();
+
+    // Backfill: assets indexed before the uploaded_at column existed have
+    // it null. Set it to extracted_at (first-index time) on first read.
+    // This runs per-page so it's cheap; once filled it never runs again.
+    const toBackfill = items.filter(
+      (a) => a.uploadedAt === null && a.extractedAt !== null,
+    );
+    if (toBackfill.length > 0) {
+      const repo = AppDataSource.getRepository(Asset);
+      for (const a of toBackfill) {
+        a.uploadedAt = a.extractedAt;
+      }
+      // Fire-and-forget write; the response already has the correct value.
+      void repo.save(toBackfill).catch(() => undefined);
+    }
+
     return { total, page, pageSize, assets: items };
   });
 
