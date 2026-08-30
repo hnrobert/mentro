@@ -7,6 +7,7 @@ use std::{
     collections::HashMap,
     io::{self, Read, Write},
     path::Path,
+    sync::Mutex,
 };
 
 use prost::Message;
@@ -18,8 +19,11 @@ use crate::{
         ECapability, ErrorInfo, ReadyMessage, Request, Response, ScanResult, WorkerFrame,
         request::Body as ReqBody, response, worker_frame::Body,
     },
-    scan, tools, unpack,
+    scan, tools, unpack, watch,
 };
+
+static WATCH_HUB: once_cell::sync::Lazy<Mutex<watch::WatchHub>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(watch::WatchHub::new()));
 
 /// Hard frame cap: 32 MB.
 const FRAME_CAP: usize = 32 * 1024 * 1024;
@@ -84,6 +88,48 @@ fn handle(req: Request) -> WorkerResult<response::Result> {
             let result = unpack::unpack(&r)?;
             Ok(response::Result::UnpackResult(result))
         }
+        Some(ReqBody::Stat(r)) => {
+            let stats: Vec<_> = r
+                .paths
+                .iter()
+                .map(|p| {
+                    let md = std::fs::metadata(p);
+                    crate::proto::mentro::worker::v1::CMsgFileStat {
+                        path: p.clone(),
+                        exists: md.is_ok(),
+                        size_bytes: md.as_ref().map(|m| m.len() as i64).unwrap_or(0),
+                        mtime_ms: md
+                            .as_ref()
+                            .ok()
+                            .and_then(|m| m.modified().ok())
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0),
+                    }
+                })
+                .collect();
+            Ok(response::Result::StatResult(
+                crate::proto::mentro::worker::v1::StatResult { stats },
+            ))
+        }
+        Some(ReqBody::Watch(r)) => {
+            WATCH_HUB
+                .lock()
+                .map_err(|e| WorkerError::internal(e.to_string()))?
+                .watch(&r.source_id, &r.root)
+                .map_err(WorkerError::internal)?;
+            Ok(response::Result::StatResult(
+                crate::proto::mentro::worker::v1::StatResult { stats: vec![] },
+            ))
+        }
+        Some(ReqBody::Unwatch(r)) => {
+            if let Ok(mut hub) = WATCH_HUB.lock() {
+                hub.unwatch(&r.source_id);
+            }
+            Ok(response::Result::StatResult(
+                crate::proto::mentro::worker::v1::StatResult { stats: vec![] },
+            ))
+        }
         Some(other) => Err(WorkerError::unsupported(format!(
             "{other:?} lands in a later milestone"
         ))),
@@ -132,9 +178,12 @@ pub fn run() -> i32 {
         protocol: 1,
         capabilities: vec![
             ECapability::Scan as i32,
+            ECapability::Watch as i32,
             ECapability::ExtractText as i32,
             ECapability::ExtractPdf as i32,
             ECapability::ExtractOffice as i32,
+            ECapability::ExtractImage as i32,
+            ECapability::ExtractMedia as i32,
             ECapability::Render as i32,
             ECapability::Unpack as i32,
         ],
@@ -183,6 +232,26 @@ pub fn run() -> i32 {
         if let Err(e) = write_frame(&mut out, &encode_frame(out_frame)) {
             eprintln!("[worker] frame write failed: {e}");
             return 101;
+        }
+        drop(out);
+
+        // Drain pending fs events after each request. This is a natural
+        // tick point; with read blocking, events accumulate between reads.
+        let fs_events = WATCH_HUB
+            .lock()
+            .map(|mut hub| hub.drain())
+            .unwrap_or_default();
+        if !fs_events.is_empty() {
+            let mut out = io::stdout().lock();
+            for ev in fs_events {
+                let frame = WorkerFrame {
+                    body: Some(Body::Fs(ev)),
+                };
+                if let Err(e) = write_frame(&mut out, &encode_frame(frame)) {
+                    eprintln!("[worker] fs event write failed: {e}");
+                    break;
+                }
+            }
         }
     }
 

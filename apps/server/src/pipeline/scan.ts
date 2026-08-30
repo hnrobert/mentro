@@ -24,7 +24,13 @@ const KIND_BY_NUMBER = [
 ] as const;
 
 /** Kinds with extractors in the current milestone. */
-const EXTRACTABLE = new Set(["text", "pdf"]);
+const EXTRACTABLE = new Set([
+  "text",
+  "pdf",
+  "image",
+  "video",
+  "audio",
+]);
 
 export async function deleteAssetCascade(
   assetId: string,

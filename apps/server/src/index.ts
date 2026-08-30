@@ -10,11 +10,12 @@ import {
   closeDataSource,
   initDataSource,
 } from "./db/data-source";
-import { Asset, Job } from "./db/entities";
+import { Asset, Job, Source } from "./db/entities";
 import { authGuard } from "./auth/guards";
 import { registerAuthRoutes } from "./auth/routes";
 import { registerAdminRoutes } from "./admin/routes";
 import { registerSourceRoutes } from "./routes/sources";
+import { onFsEvent } from "./fs-events";
 import { registerAssetRoutes } from "./routes/assets";
 import { registerLibraryRoutes } from "./routes/library";
 import { registerSearchRoutes } from "./routes/search";
@@ -59,11 +60,31 @@ async function main(): Promise<void> {
 
   const worker = new WorkerClient(config.workerBin, {
     onLog: (_level, message) => console.log(`[worker] ${message}`),
+    onFs: (event) => {
+      console.log(`[worker] fs ${event.kind} ${event.path}`);
+      onFsEvent(
+        { sourceId: event.sourceId, path: event.path, kind: event.kind },
+        worker,
+      );
+    },
   });
   const ready = await worker.start();
   console.log(
     `[worker] ready · protocol ${ready.protocol} · capabilities ${ready.capabilities.join(",")}`,
   );
+
+  // Watch all existing sources on boot.
+  if (ready.capabilities.includes(2)) {
+    const sources = await AppDataSource.getRepository(Source).find();
+    for (const source of sources) {
+      worker
+        .watch(source.id, source.rootPath)
+        .then(() => console.log(`[watch] watching ${source.rootPath}`))
+        .catch((err) =>
+          console.warn(`[watch] failed ${source.rootPath}:`, err),
+        );
+    }
+  }
 
   const app = Fastify({ logger: false, bodyLimit: 4 * 1024 * 1024 });
   await app.register(rateLimit, { global: false });

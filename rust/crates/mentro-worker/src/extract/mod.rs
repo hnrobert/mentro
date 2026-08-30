@@ -1,3 +1,4 @@
+pub mod media;
 pub mod ooxml;
 pub mod pdf;
 pub mod pdf_layout;
@@ -30,6 +31,9 @@ pub fn extract(req: &ExtractRequest) -> WorkerResult<ExtractResult> {
         crate::proto::mentro::worker::v1::EAssetKind::Presentation => ooxml::extract_pptx(path)?,
         crate::proto::mentro::worker::v1::EAssetKind::Document => ooxml::extract_docx(path)?,
         crate::proto::mentro::worker::v1::EAssetKind::Spreadsheet => ooxml::extract_xlsx(path)?,
+        crate::proto::mentro::worker::v1::EAssetKind::Image => media::extract_image(path)?,
+        crate::proto::mentro::worker::v1::EAssetKind::Video
+        | crate::proto::mentro::worker::v1::EAssetKind::Audio => media::extract_av(path)?,
         other => {
             return Err(WorkerError::unsupported(format!(
                 "{other:?} extraction lands in a later milestone"

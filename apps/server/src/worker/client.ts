@@ -5,7 +5,10 @@ import {
   ExtractRequestSchema,
   RequestSchema,
   ScanRequestSchema,
+  UnwatchRequestSchema,
+  WatchRequestSchema,
   WorkerFrameSchema,
+  type FsMessage,
   type ReadyMessage,
   type Request,
   type Response,
@@ -69,6 +72,7 @@ interface Waiter {
 
 export interface WorkerEvents {
   onLog?: (level: number, message: string) => void;
+  onFs?: (event: FsMessage) => void;
 }
 
 export class WorkerClient {
@@ -132,6 +136,9 @@ export class WorkerClient {
                 frame.body.value.message,
               );
               break;
+            case "fs":
+              this.events.onFs?.(frame.body.value);
+              break;
             default:
               break; // progress/fs/ocrStatus arrive in later milestones
           }
@@ -192,6 +199,27 @@ export class WorkerClient {
       {
         case: "extract",
         value: create(ExtractRequestSchema, { want: [], ...fields }),
+      },
+      timeoutMs,
+    );
+  }
+
+  async watch(
+    sourceId: string,
+    root: string,
+    timeoutMs?: number,
+  ): Promise<Response> {
+    return this.request(
+      { case: "watch", value: create(WatchRequestSchema, { sourceId, root }) },
+      timeoutMs,
+    );
+  }
+
+  async unwatch(sourceId: string, timeoutMs?: number): Promise<Response> {
+    return this.request(
+      {
+        case: "unwatch",
+        value: create(UnwatchRequestSchema, { sourceId }),
       },
       timeoutMs,
     );

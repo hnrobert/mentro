@@ -9,6 +9,7 @@ mod serve;
 mod shell;
 mod tools;
 mod unpack;
+mod watch;
 
 use clap::{Parser, Subcommand};
 use shell::Shell;

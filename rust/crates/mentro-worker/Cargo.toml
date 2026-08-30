@@ -12,7 +12,11 @@ bzip2 = "0.4"
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
 globset = "0.4"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 infer = "0.19"
+kamadak-exif = "0.5"
+notify = "8"
+once_cell = "1"
 prost = "0.14"
 quick-xml = "0.38"
 serde = { version = "1", features = ["derive"] }
