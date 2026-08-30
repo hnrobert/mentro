@@ -1,0 +1,40 @@
+services:
+  mentro:
+    build:
+      context: .
+      dockerfile: docker/mentro/Dockerfile
+    ports:
+      - "37797:37797"
+    volumes:
+      - mentro-data:/app/data
+      - ${MENTRO_SOURCES_DIR:-./ref}:/sources:ro
+    environment:
+      - MENTRO_BIND=0.0.0.0
+      - MENTRO_PORT=37797
+      - MENTRO_DATA=/app/data
+      - MENTRO_SOURCES=/sources
+      - MENTRO_OFFICE_PORT=9400
+      - MENTRO_OCR_PORT=9300
+    depends_on:
+      - gotenberg
+      - paddle-ocr
+    restart: unless-stopped
+
+  gotenberg:
+    image: gotenberg/gotenberg:8.32.0-libreoffice
+    ports:
+      - "127.0.0.1:9400:3000"
+    restart: unless-stopped
+
+  paddle-ocr:
+    build:
+      context: docker/ocr
+    ports:
+      - "127.0.0.1:9300:8080"
+    volumes:
+      - paddle-models:/root/.paddlex
+    restart: unless-stopped
+
+volumes:
+  mentro-data:
+  paddle-models:

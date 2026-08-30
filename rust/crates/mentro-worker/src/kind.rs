@@ -29,9 +29,8 @@ pub fn classify(mime: Option<&str>, path: &Path) -> EAssetKind {
         "docx" | "doc" => EAssetKind::Document,
         "xlsx" | "xls" | "numbers" => EAssetKind::Spreadsheet,
         "pdf" => EAssetKind::Pdf,
-        "txt" | "md" | "markdown" | "csv" | "json" | "tex" | "bib" | "log" | "epub" => {
-            EAssetKind::Text
-        }
+        "txt" | "md" | "markdown" | "csv" | "json" | "tex" | "bib" | "log" => EAssetKind::Text,
+        "epub" => EAssetKind::Archive,
         "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "heic" | "tiff" | "svg" => {
             EAssetKind::Image
         }

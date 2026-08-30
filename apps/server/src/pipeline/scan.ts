@@ -30,6 +30,7 @@ const EXTRACTABLE = new Set([
   "image",
   "video",
   "audio",
+  "archive", // epub only; worker rejects other archives
 ]);
 
 export async function deleteAssetCascade(

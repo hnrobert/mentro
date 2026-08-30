@@ -1,3 +1,5 @@
+pub mod epub;
+pub mod heic;
 pub mod media;
 pub mod ooxml;
 pub mod pdf;
@@ -31,9 +33,34 @@ pub fn extract(req: &ExtractRequest) -> WorkerResult<ExtractResult> {
         crate::proto::mentro::worker::v1::EAssetKind::Presentation => ooxml::extract_pptx(path)?,
         crate::proto::mentro::worker::v1::EAssetKind::Document => ooxml::extract_docx(path)?,
         crate::proto::mentro::worker::v1::EAssetKind::Spreadsheet => ooxml::extract_xlsx(path)?,
-        crate::proto::mentro::worker::v1::EAssetKind::Image => media::extract_image(path)?,
+        crate::proto::mentro::worker::v1::EAssetKind::Image => {
+            let is_heic = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| matches!(e.to_ascii_lowercase().as_str(), "heic" | "heif"))
+                .unwrap_or(false);
+            if is_heic {
+                heic::extract_heic(path)?
+            } else {
+                media::extract_image(path)?
+            }
+        }
         crate::proto::mentro::worker::v1::EAssetKind::Video
         | crate::proto::mentro::worker::v1::EAssetKind::Audio => media::extract_av(path)?,
+        crate::proto::mentro::worker::v1::EAssetKind::Archive => {
+            let is_epub = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("epub"))
+                .unwrap_or(false);
+            if is_epub {
+                epub::extract_epub(path)?
+            } else {
+                return Err(WorkerError::unsupported(
+                    "non-epub archive extraction not supported",
+                ));
+            }
+        }
         other => {
             return Err(WorkerError::unsupported(format!(
                 "{other:?} extraction lands in a later milestone"
