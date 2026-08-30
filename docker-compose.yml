@@ -15,9 +15,15 @@ services:
       - MENTRO_SOURCES=/sources
       - MENTRO_OFFICE_PORT=9400
       - MENTRO_OCR_PORT=9300
+      # Sidecars run as sibling services: point the worker straight at
+      # them instead of docker-managed containers.
+      - MENTRO_WHISPER_URL=http://whisper:8000
+      - MENTRO_EMBED_URL=http://embed:8000
     depends_on:
       - gotenberg
       - paddle-ocr
+      - whisper
+      - embed
     restart: unless-stopped
 
   gotenberg:
@@ -35,6 +41,30 @@ services:
       - paddle-models:/root/.paddlex
     restart: unless-stopped
 
+  whisper:
+    build:
+      context: docker/whisper
+    ports:
+      - "127.0.0.1:9500:8000"
+    volumes:
+      - whisper-models:/root/.cache
+    restart: unless-stopped
+
+  embed:
+    build:
+      context: docker/embedding
+    ports:
+      - "127.0.0.1:9600:8000"
+    environment:
+      # bge-m3 (default) needs ~3 GB RAM; on memory-tight hosts a smaller
+      # multilingual model keeps semantic search alive at some quality cost.
+      - EMBED_MODEL=${MENTRO_EMBED_MODEL:-BAAI/bge-m3}
+    volumes:
+      - embed-models:/root/.cache
+    restart: unless-stopped
+
 volumes:
   mentro-data:
   paddle-models:
+  whisper-models:
+  embed-models:

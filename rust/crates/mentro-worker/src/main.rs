@@ -1,4 +1,6 @@
+mod embed;
 mod error;
+mod export;
 mod ext;
 mod extract;
 mod kind;
@@ -8,6 +10,7 @@ mod scan;
 mod serve;
 mod shell;
 mod tools;
+mod transcribe;
 mod unpack;
 mod watch;
 
@@ -65,6 +68,20 @@ enum Command {
     },
     /// OCR a single image; JSON result to stdout.
     Ocr { path: std::path::PathBuf },
+    /// Transcribe an audio/video file; JSON segments to stdout.
+    Transcribe { path: std::path::PathBuf },
+    /// Embed texts (one per stdin line); JSON vectors to stdout.
+    Embed,
+    /// Compose a document from selected units; JSON artifact path to
+    /// stdout. UNITS are `path:ordinal` (1-based page/slide).
+    Export {
+        #[arg(short, long)]
+        format: String,
+        /// Output file (under MENTRO_DATA/exports when relative).
+        #[arg(short, long)]
+        out: String,
+        units: Vec<String>,
+    },
 }
 
 fn main() {
@@ -81,6 +98,9 @@ fn main() {
         Command::Extract { path } => extract_cli(&shell, &path),
         Command::Unpack { path, out } => unpack_cli(&shell, &path, &out),
         Command::Ocr { .. } => todo_later(&shell, "ocr", "M5"),
+        Command::Transcribe { path } => transcribe_cli(&shell, &path),
+        Command::Embed => embed_cli(&shell),
+        Command::Export { format, out, units } => export_cli(&shell, &format, &out, &units),
     };
     std::process::exit(code);
 }
@@ -193,6 +213,108 @@ fn extract_cli(shell: &Shell, path: &std::path::Path) -> i32 {
         }
         Err(e) => {
             shell.warn(&format!("extract failed: {e}"));
+            EXIT_FAILURE
+        }
+    }
+}
+
+fn transcribe_cli(shell: &Shell, path: &std::path::Path) -> i32 {
+    let req = proto::mentro::worker::v1::TranscribeRequest {
+        asset_id: String::new(),
+        path: path.to_string_lossy().to_string(),
+        content_hash: String::new(),
+    };
+    match transcribe::transcribe(&req) {
+        Ok(result) => {
+            shell.status(&format!("Transcribed {} segment(s)", result.segments.len()));
+            let segments: Vec<_> = result
+                .segments
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "startMs": s.start_ms,
+                        "endMs": s.end_ms,
+                        "text": s.text,
+                    })
+                })
+                .collect();
+            shell.result(&serde_json::json!({ "segments": segments }));
+            0
+        }
+        Err(e) => {
+            shell.warn(&format!("transcribe failed: {e}"));
+            EXIT_FAILURE
+        }
+    }
+}
+
+fn embed_cli(shell: &Shell) -> i32 {
+    use std::io::BufRead;
+    let texts: Vec<String> = std::io::stdin()
+        .lock()
+        .lines()
+        .map_while(Result::ok)
+        .collect();
+    let req = proto::mentro::worker::v1::EmbedRequest { texts };
+    match embed::embed(&req) {
+        Ok(result) => {
+            shell.status(&format!("Embedded {} text(s)", result.embeddings.len()));
+            let vectors: Vec<_> = result
+                .embeddings
+                .iter()
+                .map(|e| serde_json::json!({ "dim": e.vector.len() }))
+                .collect();
+            shell.result(&serde_json::json!({ "embeddings": vectors }));
+            0
+        }
+        Err(e) => {
+            shell.warn(&format!("embed failed: {e}"));
+            EXIT_FAILURE
+        }
+    }
+}
+
+fn export_cli(shell: &Shell, format: &str, out: &str, units: &[String]) -> i32 {
+    let format = match format.to_ascii_lowercase().as_str() {
+        "pdf" => proto::mentro::worker::v1::EExportFormat::Pdf as i32,
+        "pptx" => proto::mentro::worker::v1::EExportFormat::Pptx as i32,
+        other => {
+            shell.warn(&format!("unknown format `{other}` (pdf | pptx)"));
+            return 1;
+        }
+    };
+    let mut parsed = Vec::new();
+    for unit in units {
+        let Some((path, ordinal)) = unit.rsplit_once(':') else {
+            shell.warn(&format!("unit `{unit}` must be path:ordinal"));
+            return 1;
+        };
+        let Ok(ordinal) = ordinal.parse::<i32>() else {
+            shell.warn(&format!("unit `{unit}` ordinal is not a number"));
+            return 1;
+        };
+        parsed.push(proto::mentro::worker::v1::CMsgUnitRef {
+            asset_id: String::new(),
+            ordinal,
+            path: path.to_string(),
+        });
+    }
+    let req = proto::mentro::worker::v1::ExportRequest {
+        units: parsed,
+        format,
+        name_hint: out
+            .trim_end_matches(".pdf")
+            .trim_end_matches(".pptx")
+            .to_string(),
+    };
+    match export::export(&req) {
+        Ok(result) => {
+            shell.status(&format!("Exported to {}", result.path));
+            shell.result(&serde_json::json!({ "path": result.path }));
+            0
+        }
+        Err(e) => {
+            shell.warn(&format!("export failed: {e}"));
             EXIT_FAILURE
         }
     }

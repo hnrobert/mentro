@@ -10,3 +10,4 @@ packages/protocol/descriptor.bin
 .DS_Store
 .mcp.json
 
+testdata/

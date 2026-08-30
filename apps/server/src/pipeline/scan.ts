@@ -2,7 +2,7 @@ import { ulid } from "ulid";
 import type { EntityManager, QueryDeepPartialEntity } from "typeorm";
 import { AppDataSource } from "../db/data-source";
 import { serializedTx } from "../db/tx";
-import { Asset, ContentUnit, Job, Source } from "../db/entities";
+import { Asset, ContentUnit, Job, Source, UnitEmbedding } from "../db/entities";
 import { ftsDeleteAsset } from "../search/fts";
 import { logRemoved, unitIdsOfAsset } from "../indexbundle";
 import { publish } from "../bus";
@@ -27,6 +27,9 @@ const KIND_BY_NUMBER = [
 const EXTRACTABLE = new Set([
   "text",
   "pdf",
+  "presentation", // OOXML text + render cache (M3)
+  "document",
+  "spreadsheet",
   "image",
   "video",
   "audio",
@@ -40,6 +43,7 @@ export async function deleteAssetCascade(
   const em = m ?? AppDataSource.manager;
   await ftsDeleteAsset(assetId, em);
   await logRemoved(await unitIdsOfAsset(assetId, em), em);
+  await em.getRepository(UnitEmbedding).delete({ assetId });
   await em.getRepository(ContentUnit).delete({ assetId });
   await em.getRepository(Job).delete({ assetId });
   await em.getRepository(Asset).delete({ id: assetId });

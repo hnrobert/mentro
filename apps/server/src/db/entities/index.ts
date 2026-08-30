@@ -4,5 +4,6 @@ export * from "./group.entity";
 export * from "./job.entity";
 export * from "./setting.entity";
 export * from "./source.entity";
+export * from "./unit-embedding.entity";
 export * from "./user-session.entity";
 export * from "./user.entity";

@@ -41,6 +41,8 @@ message Request {
     OcrRequest ocr = 10;
     ExportRequest export = 11;
     UnpackRequest unpack = 12;
+    TranscribeRequest transcribe = 13;
+    EmbedRequest embed = 14;
   }
 }
 
@@ -128,11 +130,47 @@ message OcrRequest {
 message ExportRequest {
   repeated CMsgUnitRef units = 1;
   EExportFormat format = 2;
+  string name_hint = 3; // artifact basename hint; unique suffix appended
 }
 
 message CMsgUnitRef {
   string asset_id = 1;
   int32 ordinal = 2;
+  string path = 3; // absolute file path (resolved by the server)
+}
+
+// Speech-to-text via the faster-whisper container. Audio track extraction
+// from video happens inside the worker (ffmpeg 16 kHz mono wav).
+message TranscribeRequest {
+  string asset_id = 1;
+  string path = 2;
+  string content_hash = 3; // fencing, same as extract
+}
+
+message TranscribeResult {
+  string asset_id = 1;
+  string content_hash = 2;
+  repeated CMsgTranscriptSegment segments = 3;
+}
+
+message CMsgTranscriptSegment {
+  int64 start_ms = 1;
+  int64 end_ms = 2;
+  string text = 3;
+}
+
+// Text embeddings via the bge-m3 container (OpenAI-compatible
+// POST /embeddings). Vectors are consumed server-side only.
+message EmbedRequest {
+  repeated string texts = 1;
+}
+
+message EmbedResult {
+  repeated CMsgEmbedding embeddings = 1;
+}
+
+message CMsgEmbedding {
+  repeated float vector = 1;
 }
 
 enum EExportFormat {
@@ -162,6 +200,8 @@ enum ECapability {
   E_CAPABILITY_OCR = 10;
   E_CAPABILITY_EXPORT = 11;
   E_CAPABILITY_UNPACK = 12;
+  E_CAPABILITY_TRANSCRIBE = 13;
+  E_CAPABILITY_EMBED = 14;
 }
 
 // Unified reply: echoes the request id; fills the matching result on ok,
@@ -177,6 +217,8 @@ message Response {
     StatResult stat_result = 13;
     ExportResult export_result = 14;
     UnpackResult unpack_result = 15;
+    TranscribeResult transcribe_result = 16;
+    EmbedResult embed_result = 17;
   }
 }
 

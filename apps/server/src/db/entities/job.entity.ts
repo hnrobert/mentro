@@ -11,7 +11,11 @@ export class Job {
   assetId!: string | null; // null for source-level jobs (scan)
 
   @Column({ type: "text", nullable: false })
-  kind!: string; // 'scan' | 'extract'
+  kind!: string; // 'scan' | 'extract' | 'transcribe' | 'embed' | 'export'
+
+  /** Kind-specific JSON: export units/format/artifactPath, etc. */
+  @Column({ type: "text", nullable: true })
+  payload!: string | null;
 
   @Column({ type: "text", nullable: false })
   status!: string; // 'pending' | 'running' | 'done' | 'failed' | 'cancelled'

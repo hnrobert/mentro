@@ -13,13 +13,14 @@ use std::{
 use prost::Message;
 
 use crate::{
+    embed,
     error::{WorkerError, WorkerResult},
-    extract,
+    export, extract,
     proto::mentro::worker::v1::{
         ECapability, ErrorInfo, ReadyMessage, Request, Response, ScanResult, WorkerFrame,
         request::Body as ReqBody, response, worker_frame::Body,
     },
-    scan, tools, unpack, watch,
+    scan, tools, transcribe, unpack, watch,
 };
 
 static WATCH_HUB: once_cell::sync::Lazy<Mutex<watch::WatchHub>> =
@@ -87,6 +88,18 @@ fn handle(req: Request) -> WorkerResult<response::Result> {
         Some(ReqBody::Unpack(r)) => {
             let result = unpack::unpack(&r)?;
             Ok(response::Result::UnpackResult(result))
+        }
+        Some(ReqBody::Export(r)) => {
+            let result = export::export(&r)?;
+            Ok(response::Result::ExportResult(result))
+        }
+        Some(ReqBody::Transcribe(r)) => {
+            let result = transcribe::transcribe(&r)?;
+            Ok(response::Result::TranscribeResult(result))
+        }
+        Some(ReqBody::Embed(r)) => {
+            let result = embed::embed(&r)?;
+            Ok(response::Result::EmbedResult(result))
         }
         Some(ReqBody::Stat(r)) => {
             let stats: Vec<_> = r
@@ -186,6 +199,9 @@ pub fn run() -> i32 {
             ECapability::ExtractMedia as i32,
             ECapability::Render as i32,
             ECapability::Unpack as i32,
+            ECapability::Export as i32,
+            ECapability::Transcribe as i32,
+            ECapability::Embed as i32,
         ],
         tools,
     };

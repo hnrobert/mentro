@@ -7,6 +7,7 @@ pub const PROBES: &[(&str, &str, &str)] = &[
     ("poppler.pdftotext", "pdftotext", "-v"),
     ("poppler.pdftoppm", "pdftoppm", "-v"),
     ("poppler.pdfinfo", "pdfinfo", "-v"),
+    ("qpdf", "qpdf", "--version"),
     ("ffmpeg", "ffmpeg", "-version"),
     ("ffprobe", "ffprobe", "-version"),
     ("container.docker", "docker", "--version"),

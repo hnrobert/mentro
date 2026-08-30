@@ -2,9 +2,12 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { ulid } from "ulid";
 import {
+  EmbedRequestSchema,
+  ExportRequestSchema,
   ExtractRequestSchema,
   RequestSchema,
   ScanRequestSchema,
+  TranscribeRequestSchema,
   UnwatchRequestSchema,
   WatchRequestSchema,
   WorkerFrameSchema,
@@ -221,6 +224,40 @@ export class WorkerClient {
         case: "unwatch",
         value: create(UnwatchRequestSchema, { sourceId }),
       },
+      timeoutMs,
+    );
+  }
+
+  async transcribe(
+    fields: { assetId: string; path: string; contentHash: string },
+    timeoutMs?: number,
+  ): Promise<Response> {
+    return this.request(
+      {
+        case: "transcribe",
+        value: create(TranscribeRequestSchema, fields),
+      },
+      timeoutMs,
+    );
+  }
+
+  async embed(texts: string[], timeoutMs?: number): Promise<Response> {
+    return this.request(
+      { case: "embed", value: create(EmbedRequestSchema, { texts }) },
+      timeoutMs,
+    );
+  }
+
+  async exportUnits(
+    fields: {
+      units: Array<{ assetId: string; ordinal: number; path: string }>;
+      format: number;
+      nameHint: string;
+    },
+    timeoutMs?: number,
+  ): Promise<Response> {
+    return this.request(
+      { case: "export", value: create(ExportRequestSchema, fields) },
       timeoutMs,
     );
   }

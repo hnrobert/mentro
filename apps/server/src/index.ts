@@ -21,6 +21,9 @@ import { registerLibraryRoutes } from "./routes/library";
 import { registerSearchRoutes } from "./routes/search";
 import { registerJobRoutes } from "./routes/jobs";
 import { registerIndexRoutes } from "./routes/index";
+import { registerExportRoutes } from "./routes/export";
+import { registerAgentRoutes } from "./routes/agent";
+import { registerMcp } from "./mcp";
 import { registerWs } from "./ws";
 import { ensurePoolSource, mountEnvSources } from "./pool";
 import { registerUploadRoutes } from "./routes/upload";
@@ -128,9 +131,12 @@ async function main(): Promise<void> {
   registerSourceRoutes(app, { worker });
   registerAssetRoutes(app);
   registerLibraryRoutes(app);
-  registerSearchRoutes(app);
+  registerSearchRoutes(app, worker);
   registerJobRoutes(app);
   registerIndexRoutes(app);
+  registerExportRoutes(app);
+  registerAgentRoutes(app, worker);
+  registerMcp(app, { jwtSecret, worker });
   registerWs(app, { jwtSecret });
 
   const dispatcher = new Dispatcher(worker, {

@@ -1,9 +1,15 @@
 import { ulid } from "ulid";
 import { AppDataSource } from "../db/data-source";
 import { serializedTx } from "../db/tx";
-import { Asset, ContentUnit, Job } from "../db/entities";
+import { Asset, ContentUnit, Job, UnitEmbedding } from "../db/entities";
 import { ftsDeleteAsset, ftsReplaceUnits } from "../search/fts";
-import { logUpserted } from "../indexbundle";
+import {
+  storeAssetEmbeddings,
+  unitEmbeddingInput,
+  embedTexts,
+  invalidateEmbeddingCache,
+} from "../search/embeddings";
+import { logRemoved, logUpserted, unitIdsOfAsset } from "../indexbundle";
 import { publish } from "../bus";
 import type { WorkerClient } from "../worker/client";
 
@@ -21,9 +27,21 @@ const MAX_IN_FLIGHT = Number(process.env.MENTRO_EXTRACT_CONCURRENCY ?? 4);
 const COVER_THUMB = 2;
 const MAX_ATTEMPTS = 3;
 const TICK_MS = 500;
+/** Sidecar embed batch size (worker caps at 64). */
+const EMBED_BATCH = 32;
+/** Transcript units group at most this many milliseconds of speech. */
+const TRANSCRIPT_WINDOW_MS = 30_000;
 
 export interface DispatcherEvents {
   onJobUpdate?: (job: Job) => void;
+}
+
+export interface ExportJobPayload {
+  units: Array<{ assetId: string; ordinal: number }>;
+  format: "pdf" | "pptx";
+  nameHint: string;
+  artifactPath?: string;
+  createdBy?: string | null;
 }
 
 export class Dispatcher {
@@ -49,7 +67,7 @@ export class Dispatcher {
     while (this.inFlight < MAX_IN_FLIGHT) {
       const jobRepo = AppDataSource.getRepository(Job);
       const job = await jobRepo.findOne({
-        where: { status: "pending", kind: "extract" },
+        where: { status: "pending" },
         order: { createdAt: "ASC" },
       });
       if (!job) return;
@@ -67,10 +85,33 @@ export class Dispatcher {
   }
 
   private async run(jobId: string): Promise<void> {
+    const job = await AppDataSource.getRepository(Job).findOneBy({ id: jobId });
+    if (!job) return;
+    switch (job.kind) {
+      case "extract":
+        return this.runExtract(job);
+      case "transcribe":
+        return this.runTranscribe(job);
+      case "embed":
+        return this.runEmbed(job);
+      case "export":
+        return this.runExport(job);
+      default:
+        await this.finish(
+          job.id,
+          "failed",
+          "E_ERROR_CODE_INTERNAL",
+          `unknown job kind ${job.kind}`,
+        );
+    }
+  }
+
+  // --- extract -----------------------------------------------------------
+
+  private async runExtract(job: Job): Promise<void> {
     const jobRepo = AppDataSource.getRepository(Job);
     const assetRepo = AppDataSource.getRepository(Asset);
-    const job = await jobRepo.findOneBy({ id: jobId });
-    if (!job?.assetId) return;
+    if (!job.assetId) return;
     const asset = await assetRepo.findOneBy({ id: job.assetId });
     if (!asset) {
       await this.finish(job.id, "cancelled", null, null);
@@ -108,6 +149,14 @@ export class Dispatcher {
           },
         );
         await this.finish(job.id, "done", null, null);
+        // Intelligence follow-ups (M6): transcript for av, embeddings for
+        // anything with units.
+        if (asset.kind === "audio" || asset.kind === "video") {
+          await this.enqueueOnce("transcribe", asset.id);
+        }
+        if (result.units.length > 0) {
+          await this.enqueueOnce("embed", asset.id);
+        }
         return;
       }
 
@@ -176,10 +225,13 @@ export class Dispatcher {
     // Units + FTS rows land in one transaction — the per-unit FTS
     // roundtrips were the dominant cost of extraction commits. Serialized:
     // one SQLite connection cannot host concurrent transactions.
-    return serializedTx(async (m) => {
+    await serializedTx(async (m) => {
       const unitRepo = m.getRepository(ContentUnit);
       await ftsDeleteAsset(assetId, m);
+      await logRemoved(await unitIdsOfAsset(assetId, m), m);
       await unitRepo.delete({ assetId });
+      // Re-extraction replaces units: stale embeddings must go too.
+      await m.getRepository(UnitEmbedding).delete({ assetId });
       const units = result.units.map((u, i) => ({
         id: ulid(),
         assetId,
@@ -200,7 +252,277 @@ export class Dispatcher {
         m,
       );
     });
+    invalidateEmbeddingCache();
     publish({ event: "index.changed" });
+  }
+
+  // --- transcribe --------------------------------------------------------
+
+  private async runTranscribe(job: Job): Promise<void> {
+    const assetRepo = AppDataSource.getRepository(Asset);
+    if (!job.assetId) return;
+    const asset = await assetRepo.findOneBy({ id: job.assetId });
+    if (!asset) {
+      await this.finish(job.id, "cancelled", null, null);
+      return;
+    }
+    try {
+      const resp = await this.worker.transcribe(
+        {
+          assetId: asset.id,
+          path: asset.path,
+          contentHash: asset.contentHash ?? "",
+        },
+        60 * 60 * 1000,
+      );
+      if (!resp.ok || resp.result?.case !== "transcribeResult") {
+        const error = resp.error;
+        const attempts = job.attempts + 1;
+        const retryable = error?.retryable === true && attempts < MAX_ATTEMPTS;
+        await this.failJob(
+          job,
+          retryable,
+          attempts,
+          error?.message ?? "transcribe failed",
+        );
+        return;
+      }
+      const result = resp.result.value;
+      // Fencing: file changed while we were transcribing.
+      const current = await assetRepo.findOneBy({ id: asset.id });
+      if (!current || (current.contentHash ?? "") !== result.contentHash) {
+        await this.finish(job.id, "pending", null, "stale result discarded");
+        return;
+      }
+      if (result.segments.length === 0) {
+        // Backend unavailable or silent media: nothing to add. Not an
+        // error — the metadata unit from M4 stays searchable.
+        await this.finish(job.id, "done", null, null);
+        return;
+      }
+      await this.persistTranscript(asset.id, result.segments);
+      await this.finish(job.id, "done", null, null);
+      await this.enqueueOnce("embed", asset.id);
+    } catch (err) {
+      const attempts = job.attempts + 1;
+      await this.failJob(job, attempts < MAX_ATTEMPTS, attempts, String(err));
+    }
+  }
+
+  private async persistTranscript(
+    assetId: string,
+    segments: Array<{
+      startMs: bigint | number;
+      endMs: bigint | number;
+      text: string;
+    }>,
+  ): Promise<void> {
+    // Group segments into ~30s windows; each window becomes a
+    // time-positioned "frame" unit (click-through in the video player).
+    const windows: Array<{ start: number; end: number; text: string }> = [];
+    for (const seg of segments) {
+      const start = Number(seg.startMs);
+      const end = Number(seg.endMs);
+      const current = windows[windows.length - 1];
+      if (current && start - current.start < TRANSCRIPT_WINDOW_MS) {
+        current.end = Math.max(current.end, end);
+        current.text += ` ${seg.text.trim()}`;
+      } else {
+        windows.push({ start, end, text: seg.text.trim() });
+      }
+    }
+
+    await serializedTx(async (m) => {
+      const unitRepo = m.getRepository(ContentUnit);
+      // Replace prior transcript units only (metaJson marker); the
+      // M4 metadata unit (ordinal 1) survives.
+      await unitRepo
+        .createQueryBuilder()
+        .delete()
+        .where("asset_id = :assetId AND meta_json = 'transcript'", { assetId })
+        .execute();
+      const base = await unitRepo.countBy({ assetId });
+      const units = windows.map((w, i) => ({
+        id: ulid(),
+        assetId,
+        ordinal: base + 1 + i,
+        unitType: "frame",
+        title: fmtTimecode(w.start),
+        text: w.text,
+        startMs: w.start,
+        endMs: w.end,
+        thumbPath: null,
+        metaJson: "transcript",
+      }));
+      if (units.length > 0) await unitRepo.insert(units);
+      const asset = await m.getRepository(Asset).findOneBy({ id: assetId });
+      await ftsReplaceUnits(units, asset?.path.split("/").pop() ?? "", m);
+      await logUpserted(
+        units.map((u) => u.id),
+        m,
+      );
+    });
+    invalidateEmbeddingCache();
+    publish({ event: "index.changed" });
+  }
+
+  // --- embed -------------------------------------------------------------
+
+  private async runEmbed(job: Job): Promise<void> {
+    if (!job.assetId) return;
+    const assetRepo = AppDataSource.getRepository(Asset);
+    const asset = await assetRepo.findOneBy({ id: job.assetId });
+    if (!asset) {
+      await this.finish(job.id, "cancelled", null, null);
+      return;
+    }
+    try {
+      // Units of this asset that lack a stored vector.
+      const rows = (await AppDataSource.query(
+        `SELECT cu.id, cu.title, cu.text FROM content_units cu
+         LEFT JOIN unit_embeddings ue ON ue.unit_id = cu.id
+         WHERE cu.asset_id = ? AND ue.unit_id IS NULL
+           AND COALESCE(cu.text, '') != ''`,
+        [asset.id],
+      )) as Array<{ id: string; title: string | null; text: string | null }>;
+      if (rows.length === 0) {
+        await this.finish(job.id, "done", null, null);
+        return;
+      }
+      const entries: Array<{
+        unitId: string;
+        assetId: string;
+        vector: Float32Array;
+      }> = [];
+      for (let i = 0; i < rows.length; i += EMBED_BATCH) {
+        const batch = rows.slice(i, i + EMBED_BATCH);
+        const vectors = await embedTexts(
+          this.worker,
+          batch.map((r) => unitEmbeddingInput(r.title, r.text)),
+        );
+        if (vectors.length === 0) {
+          // Sidecar unavailable: semantic search degrades to FTS-only.
+          await this.finish(
+            job.id,
+            "done",
+            null,
+            "embedding backend unavailable",
+          );
+          return;
+        }
+        batch.forEach((r, j) => {
+          const vector = vectors[j];
+          if (vector) entries.push({ unitId: r.id, assetId: asset.id, vector });
+        });
+      }
+      await storeAssetEmbeddings(entries);
+      await this.finish(job.id, "done", null, null);
+    } catch (err) {
+      const attempts = job.attempts + 1;
+      await this.failJob(job, attempts < MAX_ATTEMPTS, attempts, String(err));
+    }
+  }
+
+  // --- export ------------------------------------------------------------
+
+  private async runExport(job: Job): Promise<void> {
+    const payload = parseExportPayload(job.payload);
+    if (!payload) {
+      await this.finish(
+        job.id,
+        "failed",
+        "E_ERROR_CODE_INVALID_INPUT",
+        "invalid export payload",
+      );
+      return;
+    }
+    try {
+      // Resolve unit refs to file paths for the worker.
+      const assetRepo = AppDataSource.getRepository(Asset);
+      const units: Array<{ assetId: string; ordinal: number; path: string }> =
+        [];
+      for (const ref of payload.units) {
+        const asset = await assetRepo.findOneBy({ id: ref.assetId });
+        if (!asset) {
+          await this.failExport(job, `asset ${ref.assetId} not found`);
+          return;
+        }
+        units.push({
+          assetId: asset.id,
+          ordinal: ref.ordinal,
+          path: asset.path,
+        });
+      }
+      const resp = await this.worker.exportUnits(
+        {
+          units,
+          format: payload.format === "pdf" ? 1 : 2,
+          nameHint: payload.nameHint || job.id,
+        },
+        10 * 60 * 1000,
+      );
+      if (resp.ok && resp.result?.case === "exportResult") {
+        const artifactPath = resp.result.value.path;
+        await AppDataSource.getRepository(Job).update(
+          { id: job.id },
+          {
+            status: "done",
+            payload: JSON.stringify({ ...payload, artifactPath }),
+            error: null,
+            updatedAt: new Date(),
+          },
+        );
+        await this.emitJob(job.id);
+        return;
+      }
+      await this.failExport(job, resp.error?.message ?? "export failed");
+    } catch (err) {
+      const attempts = job.attempts + 1;
+      await this.failJob(job, attempts < MAX_ATTEMPTS, attempts, String(err));
+    }
+  }
+
+  private async failExport(job: Job, message: string): Promise<void> {
+    await AppDataSource.getRepository(Job).update(
+      { id: job.id },
+      { status: "failed", error: message, updatedAt: new Date() },
+    );
+    await this.emitJob(job.id);
+  }
+
+  // --- helpers -----------------------------------------------------------
+
+  /** Insert a job of `kind` for `assetId` unless a live one exists. */
+  private async enqueueOnce(kind: string, assetId: string): Promise<void> {
+    const jobRepo = AppDataSource.getRepository(Job);
+    const existing = await jobRepo.findOne({
+      where: { kind, assetId, status: "pending" },
+    });
+    if (existing) return;
+    await jobRepo.insert({
+      id: ulid(),
+      assetId,
+      kind,
+      status: "pending",
+    });
+  }
+
+  private async failJob(
+    job: Job,
+    retryable: boolean,
+    attempts: number,
+    message: string,
+  ): Promise<void> {
+    await AppDataSource.getRepository(Job).update(
+      { id: job.id },
+      {
+        status: retryable ? "pending" : "failed",
+        attempts,
+        error: message,
+        updatedAt: new Date(),
+      },
+    );
+    await this.emitJob(job.id);
   }
 
   private async finish(
@@ -214,9 +536,34 @@ export class Dispatcher {
       { id: jobId },
       { status, errorCode, error, updatedAt: new Date() },
     );
-    const job = await jobRepo.findOneBy({ id: jobId });
+    await this.emitJob(jobId);
+  }
+
+  private async emitJob(jobId: string): Promise<void> {
+    const job = await AppDataSource.getRepository(Job).findOneBy({ id: jobId });
     if (job) this.events.onJobUpdate?.(job);
   }
+}
+
+export function parseExportPayload(
+  raw: string | null,
+): ExportJobPayload | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as ExportJobPayload;
+    if (!Array.isArray(parsed.units) || parsed.units.length === 0) return null;
+    if (parsed.format !== "pdf" && parsed.format !== "pptx") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function fmtTimecode(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 function kindNumber(kind: string): number {

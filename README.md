@@ -6,14 +6,14 @@ A self-hosted knowledge base and search platform: parses PPT / PDF / images / vi
 Browser (Vue 3 SPA) ── HTTP/WS ──> mentro-server (Node 24, TypeORM + SQLite)
                                         │ spawn + protobuf over stdio
                                   mentro-worker (Rust CLI)
-                                        │ poppler / ffmpeg / Gotenberg / PaddleOCR containers
+                                        │ poppler / ffmpeg / Gotenberg / PaddleOCR / faster-whisper / bge-m3 containers
 ```
 
 Full design document: [docs/plan.md](docs/plan.md).
 
 ## Quick Start (Development)
 
-Prerequisites: Node 24, pnpm, Rust 1.93.1, [buf](https://buf.build), poppler, ffmpeg (optional: Docker for office rendering and OCR containers).
+Prerequisites: Node 24, pnpm, Rust 1.93.1, [buf](https://buf.build), poppler, ffmpeg, qpdf (optional: Docker for the office-rendering, OCR, transcription, and embedding containers).
 
 ```bash
 pnpm install          # install dependencies (native modules argon2/better-sqlite3 built automatically)
@@ -40,6 +40,45 @@ proto/          buf-managed worker protocol .proto (the only committed protocol 
 rust/           Cargo workspace (mentro-worker: extraction / scanning / rendering / OCR / container management)
 ```
 
+## Intelligence Layer (M6)
+
+Three optional backends, each lazily started and gracefully degrading —
+the text index never depends on them:
+
+| Feature              | Backend                                                            | Off switch / override                         |
+| -------------------- | ------------------------------------------------------------------ | --------------------------------------------- |
+| Speech-to-text       | `mentro-whisper` container (faster-whisper)                        | `MENTRO_WHISPER=off` · `MENTRO_WHISPER_URL=…` |
+| Semantic search      | `mentro-embed` container (bge-m3, OpenAI-compatible `/embeddings`) | `MENTRO_EMBED=off` · `MENTRO_EMBED_URL=…`     |
+| Selected-page export | qpdf (PDF split/merge) + in-process OOXML surgery (PPTX)           | requires `qpdf` on PATH                       |
+
+Search merges keyword (FTS5) and semantic rankings by default
+(`GET /api/search?mode=hybrid|fts|semantic`).
+
+### Agent Tool API
+
+Agents read and operate through HTTP only — never the file system:
+
+- HTTP: `/api/agent/search`, `/api/agent/assets/:id`, `/api/agent/units/:id`,
+  `/api/agent/context`, `/api/agent/export`, `/api/agent/transcribe/:assetId`
+  (JWT auth, same as the UI).
+- MCP: `POST /mcp` (streamable HTTP, stateless) exposing the same operations
+  as MCP tools. Attach from Claude Code:
+
+```bash
+claude mcp add --transport http mentro http://127.0.0.1:37797/mcp \
+  --header "Authorization: Bearer <access-token>"
+```
+
+### Export
+
+`POST /api/export { units: [{assetId, ordinal}], format: "pdf"|"pptx" }`
+composes a new document from selected pages/slides (PDF merges across
+files via qpdf; PPTX cuts slides from one deck with byte-verbatim part
+copying), then `GET /api/export/:id/file` downloads the artifact.
+
 ## Deployment
 
-M5+ provides a docker compose stack (server+worker, Gotenberg, PaddleOCR). For remote access, a reverse proxy (Caddy/nginx) is recommended to terminate TLS.
+M5+ provides a docker compose stack (server+worker, Gotenberg, PaddleOCR,
+whisper, embedding). For remote access, a reverse proxy (Caddy/nginx) is
+recommended to terminate TLS. Scale evaluation of the browser search
+engine lives in [docs/search-evaluation.md](docs/search-evaluation.md).

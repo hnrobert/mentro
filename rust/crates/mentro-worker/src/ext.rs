@@ -3,6 +3,7 @@
 //! Contract: bounded output capture (16 MB), hard timeout with kill,
 //! typed error mapping. Stdout is returned as lossy UTF-8.
 
+pub mod container;
 pub mod gotenberg;
 
 use std::{

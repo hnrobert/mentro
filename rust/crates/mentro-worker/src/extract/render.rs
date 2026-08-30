@@ -14,8 +14,9 @@ fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var("MENTRO_DATA").unwrap_or_else(|_| "./data".into()))
 }
 
-/// Cached Office->PDF path, rendering on first request.
-fn ensure_pdf(path: &Path, asset_id: &str) -> Option<PathBuf> {
+/// Cached Office->PDF path, rendering on first request. Also feeds PDF
+/// export of office pages (export/pdf.rs).
+pub(crate) fn ensure_pdf(path: &Path, asset_id: &str) -> Option<PathBuf> {
     let render_dir = data_dir().join("render");
     std::fs::create_dir_all(&render_dir).ok()?;
     let pdf_path = render_dir.join(format!("{asset_id}.pdf"));

@@ -1,6 +1,7 @@
 import { AddFtsFilename1766000002000 } from "./1766000002000-AddFtsFilename";
 import { FtsContentful1766000001000 } from "./1766000001000-FtsContentful";
 import { IndexLog1766000003000 } from "./1766000003000-IndexLog";
+import { IntelligenceLayer1788113759723 } from "./1788113759723-IntelligenceLayer";
 import { KnowledgeBase1787780185568 } from "./1787780185568-KnowledgeBase";
 import { Init1766000000000 } from "./1766000000000-Init";
 
@@ -13,4 +14,5 @@ export const migrations = [
   AddFtsFilename1766000002000,
   IndexLog1766000003000,
   KnowledgeBase1787780185568,
+  IntelligenceLayer1788113759723,
 ];

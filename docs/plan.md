@@ -673,6 +673,8 @@ extract(units) -> selected-page export (PPTX: Rust OOXML surgery, parts copied v
 transcribe(assetId) -> timestamped text
 ```
 
+M6 as-built notes (2026-08): PDF composition goes through `qpdf --empty --pages` instead of lopdf — qpdf copies page objects byte-verbatim (no re-serialization), which is the stronger reading of "parts copied verbatim"; it is probed in `doctor` and degrades with a clear error. Transcription (faster-whisper) and embeddings (bge-m3 via a self-built OpenAI-compatible sidecar) follow the PaddleOCR lazy-container pattern, managed by the shared `ext/container.rs` guard; both accept `MENTRO_*_URL` overrides so compose deployments point at sibling services. Semantic search stores vectors in SQLite (`unit_embeddings`, brute-force cosine over an in-memory cache) and merges with FTS via Reciprocal Rank Fusion. The Agent Tool API ships as `/api/agent/*` HTTP plus a stateless MCP streamable-HTTP endpoint at `POST /mcp` with the same operations as tools. The §9.2 evaluation (docs/search-evaluation.md) found trigger #3 (cold build > 500 ms) already tripped at 964 units; a per-field token dedup cut ~33%, and Path A (sql.js FTS5 WASM) is scheduled as the follow-up engine swap.
+
 ## 13. Risks and Responses
 
 | Risk                                                               | Impact                                            | Response                                                                                                                                                                                                                                                                           |
