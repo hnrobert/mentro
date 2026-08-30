@@ -47,7 +47,7 @@ jobs:
           input: proto
           lint: true
           breaking: true
-          breaking_against: ".git#branch=main"
+          breaking_against: ".git#branch=main,subdir=proto"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
