@@ -8,3 +8,5 @@ packages/protocol/gen/
 packages/protocol/descriptor.bin
 *.log
 .DS_Store
+.mcp.json
+
