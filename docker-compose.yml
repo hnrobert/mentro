@@ -13,10 +13,11 @@ services:
       - MENTRO_PORT=37797
       - MENTRO_DATA=/app/data
       - MENTRO_SOURCES=/sources
-      - MENTRO_OFFICE_PORT=9400
-      - MENTRO_OCR_PORT=9300
       # Sidecars run as sibling services: point the worker straight at
-      # them instead of docker-managed containers.
+      # them instead of docker-managed containers (no docker socket in
+      # the app container).
+      - MENTRO_OFFICE_URL=http://gotenberg:3000
+      - MENTRO_OCR_URL=http://paddle-ocr:8080
       - MENTRO_WHISPER_URL=http://whisper:8000
       - MENTRO_EMBED_URL=http://embed:8000
     depends_on:
@@ -28,15 +29,16 @@ services:
 
   gotenberg:
     image: gotenberg/gotenberg:8.32.0-libreoffice
-    ports:
-      - "127.0.0.1:9400:3000"
+    environment:
+      # LibreOffice conversions serialize on a process lock; with the
+      # worker pool firing big decks in parallel the default 30s api
+      # timeout 503s while queued.
+      - GOTENBERG_API_TIMEOUT=600s
     restart: unless-stopped
 
   paddle-ocr:
     build:
       context: docker/ocr
-    ports:
-      - "127.0.0.1:9300:8080"
     volumes:
       - paddle-models:/root/.paddlex
     restart: unless-stopped
@@ -44,8 +46,6 @@ services:
   whisper:
     build:
       context: docker/whisper
-    ports:
-      - "127.0.0.1:9500:8000"
     volumes:
       - whisper-models:/root/.cache
     restart: unless-stopped
@@ -53,8 +53,6 @@ services:
   embed:
     build:
       context: docker/embedding
-    ports:
-      - "127.0.0.1:9600:8000"
     environment:
       # bge-m3 (default) needs ~3 GB RAM; on memory-tight hosts a smaller
       # multilingual model keeps semantic search alive at some quality cost.

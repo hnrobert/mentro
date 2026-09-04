@@ -1,0 +1,9 @@
+# Build context hygiene: everything here is either regenerated inside
+# the image (pnpm install) or never needed for the app image.
+**/node_modules
+.git
+rust/target
+bin
+apps/server/data
+apps/server/scripts/dist
+*.log

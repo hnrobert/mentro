@@ -39,6 +39,12 @@ fn warn_once(msg: &str) {
 /// Ensure the container is up; returns the base URL or None.
 pub fn ensure() -> Option<String> {
     use std::sync::atomic::Ordering;
+    // Compose deployments point straight at a sibling service.
+    if let Ok(url) = std::env::var("MENTRO_OFFICE_URL")
+        && !url.is_empty()
+    {
+        return Some(url.trim_end_matches('/').to_string());
+    }
     match STATE.load(Ordering::Relaxed) {
         1 => return Some(format!("http://127.0.0.1:{}", port())),
         2 => return None,

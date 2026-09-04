@@ -49,6 +49,12 @@ fn warn_once(msg: &str) {
 
 /// Ensure the container is up; returns the base URL or None.
 pub fn ensure() -> Option<String> {
+    // Compose deployments point straight at a sibling service.
+    if let Ok(url) = std::env::var("MENTRO_OCR_URL")
+        && !url.is_empty()
+    {
+        return Some(url.trim_end_matches('/').to_string());
+    }
     if std::env::var("MENTRO_OCR")
         .map(|v| v == "off")
         .unwrap_or(false)

@@ -21,8 +21,8 @@ export async function ensurePoolSource(dataDir: string): Promise<Source> {
   return ensureSource(path.join(dataDir, "pool"));
 }
 
-/** MENTRO_SOURCES (comma-separated) mounts, idempotent, scanned in the
- * background at boot. */
+/** MENTRO_SOURCES (comma-separated) mounts, idempotent, watched and
+ * scanned in the background at boot. */
 export async function mountEnvSources(worker: WorkerClient): Promise<void> {
   const raw = process.env.MENTRO_SOURCES ?? "";
   for (const entry of raw.split(/[,，]/)) {
@@ -34,6 +34,12 @@ export async function mountEnvSources(worker: WorkerClient): Promise<void> {
       continue;
     }
     const source = await ensureSource(abs);
+    // Fresh sources must be watched too — the boot loop in index.ts only
+    // covers sources already in the DB when it ran.
+    worker
+      .watch(source.id, source.rootPath)
+      .then(() => console.log(`[watch] watching ${source.rootPath}`))
+      .catch((err) => console.warn(`[watch] failed ${source.rootPath}:`, err));
     void runSourceScan(source, worker)
       .then((o) => console.log(`[pool] mounted ${abs}: ${JSON.stringify(o)}`))
       .catch((err) => console.error(`[pool] mount scan ${abs} failed:`, err));

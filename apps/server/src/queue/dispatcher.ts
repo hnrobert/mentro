@@ -12,6 +12,7 @@ import {
 import { logRemoved, logUpserted, unitIdsOfAsset } from "../indexbundle";
 import { publish } from "../bus";
 import type { WorkerClient } from "../worker/client";
+import { WorkerPool } from "../worker/pool";
 
 const UNIT_TYPE_BY_NUMBER = [
   "unspecified",
@@ -22,7 +23,6 @@ const UNIT_TYPE_BY_NUMBER = [
   "whole",
 ] as const;
 
-const MAX_IN_FLIGHT = Number(process.env.MENTRO_EXTRACT_CONCURRENCY ?? 4);
 /** EExtractWant.CoverThumb */
 const COVER_THUMB = 2;
 const MAX_ATTEMPTS = 3;
@@ -46,10 +46,9 @@ export interface ExportJobPayload {
 
 export class Dispatcher {
   private timer: NodeJS.Timeout | null = null;
-  private inFlight = 0;
 
   constructor(
-    private readonly worker: WorkerClient,
+    private readonly pool: WorkerPool,
     private readonly events: DispatcherEvents = {},
   ) {}
 
@@ -64,38 +63,45 @@ export class Dispatcher {
   }
 
   private async tick(): Promise<void> {
-    while (this.inFlight < MAX_IN_FLIGHT) {
+    // Concurrency is worker-bound: each job claims an idle worker for
+    // its whole duration (the serve loop inside one worker process is
+    // sequential; the pool IS the parallelism).
+    for (;;) {
+      const worker = this.pool.tryClaim();
+      if (!worker) return;
       const jobRepo = AppDataSource.getRepository(Job);
       const job = await jobRepo.findOne({
         where: { status: "pending" },
         order: { createdAt: "ASC" },
       });
-      if (!job) return;
+      if (!job) {
+        this.pool.release(worker);
+        return;
+      }
       await jobRepo.update(
         { id: job.id },
         { status: "running", updatedAt: new Date() },
       );
-      this.inFlight++;
-      void this.run(job.id)
+      void this.run(job.id, worker)
         .catch((err) => console.error("[queue] job crashed:", err))
         .finally(() => {
-          this.inFlight--;
+          this.pool.release(worker);
         });
     }
   }
 
-  private async run(jobId: string): Promise<void> {
+  private async run(jobId: string, worker: WorkerClient): Promise<void> {
     const job = await AppDataSource.getRepository(Job).findOneBy({ id: jobId });
     if (!job) return;
     switch (job.kind) {
       case "extract":
-        return this.runExtract(job);
+        return this.runExtract(job, worker);
       case "transcribe":
-        return this.runTranscribe(job);
+        return this.runTranscribe(job, worker);
       case "embed":
-        return this.runEmbed(job);
+        return this.runEmbed(job, worker);
       case "export":
-        return this.runExport(job);
+        return this.runExport(job, worker);
       default:
         await this.finish(
           job.id,
@@ -108,7 +114,7 @@ export class Dispatcher {
 
   // --- extract -----------------------------------------------------------
 
-  private async runExtract(job: Job): Promise<void> {
+  private async runExtract(job: Job, worker: WorkerClient): Promise<void> {
     const jobRepo = AppDataSource.getRepository(Job);
     const assetRepo = AppDataSource.getRepository(Asset);
     if (!job.assetId) return;
@@ -122,7 +128,7 @@ export class Dispatcher {
     try {
       const kind = kindNumber(asset.kind);
       const want = kind === 3 || kind === 4 ? [COVER_THUMB] : []; // presentation/document
-      const resp = await this.worker.extract({
+      const resp = await worker.extract({
         assetId: asset.id,
         path: asset.path,
         contentHash: asset.contentHash ?? "",
@@ -258,7 +264,7 @@ export class Dispatcher {
 
   // --- transcribe --------------------------------------------------------
 
-  private async runTranscribe(job: Job): Promise<void> {
+  private async runTranscribe(job: Job, worker: WorkerClient): Promise<void> {
     const assetRepo = AppDataSource.getRepository(Asset);
     if (!job.assetId) return;
     const asset = await assetRepo.findOneBy({ id: job.assetId });
@@ -267,7 +273,7 @@ export class Dispatcher {
       return;
     }
     try {
-      const resp = await this.worker.transcribe(
+      const resp = await worker.transcribe(
         {
           assetId: asset.id,
           path: asset.path,
@@ -368,7 +374,7 @@ export class Dispatcher {
 
   // --- embed -------------------------------------------------------------
 
-  private async runEmbed(job: Job): Promise<void> {
+  private async runEmbed(job: Job, worker: WorkerClient): Promise<void> {
     if (!job.assetId) return;
     const assetRepo = AppDataSource.getRepository(Asset);
     const asset = await assetRepo.findOneBy({ id: job.assetId });
@@ -397,7 +403,7 @@ export class Dispatcher {
       for (let i = 0; i < rows.length; i += EMBED_BATCH) {
         const batch = rows.slice(i, i + EMBED_BATCH);
         const vectors = await embedTexts(
-          this.worker,
+          worker,
           batch.map((r) => unitEmbeddingInput(r.title, r.text)),
         );
         if (vectors.length === 0) {
@@ -425,7 +431,7 @@ export class Dispatcher {
 
   // --- export ------------------------------------------------------------
 
-  private async runExport(job: Job): Promise<void> {
+  private async runExport(job: Job, worker: WorkerClient): Promise<void> {
     const payload = parseExportPayload(job.payload);
     if (!payload) {
       await this.finish(
@@ -453,7 +459,7 @@ export class Dispatcher {
           path: asset.path,
         });
       }
-      const resp = await this.worker.exportUnits(
+      const resp = await worker.exportUnits(
         {
           units,
           format: payload.format === "pdf" ? 1 : 2,

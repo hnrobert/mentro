@@ -76,9 +76,33 @@ composes a new document from selected pages/slides (PDF merges across
 files via qpdf; PPTX cuts slides from one deck with byte-verbatim part
 copying), then `GET /api/export/:id/file` downloads the artifact.
 
-## Deployment
+## Deployment (docker compose)
 
-M5+ provides a docker compose stack (server+worker, Gotenberg, PaddleOCR,
-whisper, embedding). For remote access, a reverse proxy (Caddy/nginx) is
-recommended to terminate TLS. Scale evaluation of the browser search
-engine lives in [docs/search-evaluation.md](docs/search-evaluation.md).
+The full stack — app (server + worker pool) plus Gotenberg, PaddleOCR,
+faster-whisper, and bge-m3 sidecars — runs from one command:
+
+```bash
+docker compose up -d --build
+# optionally index an existing directory (read-only mount):
+MENTRO_SOURCES_DIR=/path/to/corpus docker compose up -d
+```
+
+The app binds `0.0.0.0:37797`, so after startup it is reachable from the
+LAN at `http://<host-ip>:37797` (find the address with `hostname -I`).
+First use: open the URL, register the first account (becomes admin), and
+let the pipeline index; sidecar models download into named volumes on
+first boot (bge-m3 ≈ 2.2 GB).
+
+Operational notes learned the hard way:
+
+- **Protocol artifacts**: `buf generate` uses BSR remote plugins, which
+  TLS-intercepting networks block inside containers — the image copies
+  host-generated `packages/protocol/{gen,descriptor.bin}` when present
+  (run `pnpm gen:proto` before `docker compose build`) and regenerates
+  only when absent.
+- **Gotenberg timeout**: the worker pool fires LibreOffice conversions in
+  parallel; the default 30s api timeout 503s on queued large decks, so
+  compose sets `GOTENBERG_API_TIMEOUT=600s`.
+- **Reverse proxy**: for anything beyond the trusted LAN, put Caddy/nginx
+  in front for TLS. Scale evaluation of the browser search engine lives
+  in [docs/search-evaluation.md](docs/search-evaluation.md).

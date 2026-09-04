@@ -25,10 +25,11 @@ import { registerExportRoutes } from "./routes/export";
 import { registerAgentRoutes } from "./routes/agent";
 import { registerMcp } from "./mcp";
 import { registerWs } from "./ws";
+import { registerWebStatic } from "./web-static";
 import { ensurePoolSource, mountEnvSources } from "./pool";
 import { registerUploadRoutes } from "./routes/upload";
 import { initSegmenter } from "./search/segment";
-import { WorkerClient } from "./worker/client";
+import { WorkerPool, defaultPoolSize } from "./worker/pool";
 import { Dispatcher } from "./queue/dispatcher";
 import { clientCount, publish } from "./bus";
 
@@ -61,19 +62,34 @@ async function main(): Promise<void> {
   await initDataSource();
   await initSegmenter();
 
-  const worker = new WorkerClient(config.workerBin, {
-    onLog: (_level, message) => console.log(`[worker] ${message}`),
-    onFs: (event) => {
-      console.log(`[worker] fs ${event.kind} ${event.path}`);
-      onFsEvent(
-        { sourceId: event.sourceId, path: event.path, kind: event.kind },
-        worker,
-      );
+  // Worker pool: N single-threaded worker processes (see serve.rs) — the
+  // pool is what parallelizes extraction/transcription/embedding across
+  // cores. Watches + fs events are pinned to the primary (worker 0).
+  const poolSize = Math.max(
+    1,
+    Number(process.env.MENTRO_WORKER_POOL_SIZE ?? defaultPoolSize()),
+  );
+  const pool = await WorkerPool.start(
+    config.workerBin,
+    {
+      onLog: (level, message) => {
+        if (level >= 3) console.warn(`[worker] ${message}`);
+      },
+      onFs: (event) => {
+        console.log(`[worker] fs ${event.kind} ${event.path}`);
+        onFsEvent(
+          { sourceId: event.sourceId, path: event.path, kind: event.kind },
+          pool.primary(),
+        );
+      },
     },
-  });
-  const ready = await worker.start();
+    poolSize,
+  );
+  const worker = pool.primary();
+  const ready = pool.ready;
+  if (!ready) throw new Error("primary worker failed to start");
   console.log(
-    `[worker] ready · protocol ${ready.protocol} · capabilities ${ready.capabilities.join(",")}`,
+    `[worker] pool of ${pool.size} ready · protocol ${ready.protocol} · capabilities ${ready.capabilities.join(",")}`,
   );
 
   // Watch all existing sources on boot.
@@ -138,8 +154,9 @@ async function main(): Promise<void> {
   registerAgentRoutes(app, worker);
   registerMcp(app, { jwtSecret, worker });
   registerWs(app, { jwtSecret });
+  registerWebStatic(app);
 
-  const dispatcher = new Dispatcher(worker, {
+  const dispatcher = new Dispatcher(pool, {
     onJobUpdate: (job) => {
       publish({
         event: "job.updated",
@@ -156,7 +173,7 @@ async function main(): Promise<void> {
     console.log("[mentro] shutting down");
     dispatcher.stop();
     await app.close();
-    await worker.stop();
+    await pool.stop();
     await closeDataSource();
     releaseLock();
     process.exit(0);

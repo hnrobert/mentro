@@ -94,9 +94,8 @@ pub fn scan_root(root: &Path) -> WorkerResult<Vec<CMsgFileRecord>> {
     let rules = IgnoreRules::load(root);
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
-    // Serial walk (walkdir): the hot cost is blake3 hashing, not traversal,
-    // and jwalk's shared rayon pool wedged under the threaded dispatcher
-    // (worker hung at 0% CPU with all requests stalled).
+    // Serial walk collecting metadata; hashing is parallelized afterwards
+    // (scoped threads — the serve loop is sequential, so nothing can wedge).
     let walker = walkdir::WalkDir::new(&root)
         .follow_links(false)
         .into_iter()
@@ -142,11 +141,6 @@ pub fn scan_root(root: &Path) -> WorkerResult<Vec<CMsgFileRecord>> {
                 .map(|t| t.mime_type().to_string())
         };
         let kind = classify(mime.as_deref(), &path);
-        let content_hash = if oversized {
-            String::new()
-        } else {
-            hash_blake3(&path).unwrap_or_default()
-        };
 
         records.push(CMsgFileRecord {
             path: path.to_string_lossy().to_string(),
@@ -155,8 +149,58 @@ pub fn scan_root(root: &Path) -> WorkerResult<Vec<CMsgFileRecord>> {
             mime: mime.unwrap_or_default(),
             kind: kind as i32,
             oversized,
-            content_hash,
+            content_hash: String::new(),
         });
+    }
+
+    // Phase 2: hash in parallel. Threads pull indices off a shared
+    // cursor; each writes its (index, hash) pairs locally and the main
+    // thread applies them — no shared mutable state. Hashing dominates
+    // on multi-GB corpora and is embarrassingly parallel across files.
+    let hashable: Vec<usize> = records
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| !r.oversized)
+        .map(|(i, _)| i)
+        .collect();
+    let results: Vec<(usize, String)> = if hashable.len() < 4 {
+        hashable
+            .iter()
+            .filter_map(|&i| hash_blake3(Path::new(&records[i].path)).map(|h| (i, h)))
+            .collect()
+    } else {
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(8);
+        let cursor = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..threads)
+                .map(|_| {
+                    let cursor = &cursor;
+                    let records = &records;
+                    let hashable = &hashable;
+                    scope.spawn(move || {
+                        let mut local = Vec::new();
+                        loop {
+                            let n = cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(&i) = hashable.get(n) else { break };
+                            if let Some(h) = hash_blake3(Path::new(&records[i].path)) {
+                                local.push((i, h));
+                            }
+                        }
+                        local
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().unwrap_or_default())
+                .collect()
+        })
+    };
+    for (i, hash) in results {
+        records[i].content_hash = hash;
     }
 
     records.sort_by(|a, b| a.path.cmp(&b.path));

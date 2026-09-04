@@ -82,12 +82,18 @@ export class WorkerClient {
   private child: ChildProcess | null = null;
   private pending = new Map<string, Waiter>();
   private readyPromise: Promise<ReadyMessage> | null = null;
+  private exitHandlers: Array<(code: number | null) => void> = [];
   ready: ReadyMessage | null = null;
 
   constructor(
     private readonly binPath: string,
     private readonly events: WorkerEvents = {},
   ) {}
+
+  /** Fired when the worker process exits (pool uses this to replace it). */
+  onExit(fn: (code: number | null) => void): void {
+    this.exitHandlers.push(fn);
+  }
 
   start(): Promise<ReadyMessage> {
     if (this.readyPromise) return this.readyPromise;
@@ -163,6 +169,7 @@ export class WorkerClient {
       });
       child.on("exit", (code) => {
         this.failAll(new Error(`worker exited with code ${code}`));
+        for (const fn of this.exitHandlers) fn(code);
         settleReady(() =>
           reject(new Error(`worker exited (${code}) before handshake`)),
         );
