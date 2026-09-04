@@ -29,11 +29,10 @@ services:
 
   gotenberg:
     image: gotenberg/gotenberg:8.32.0-libreoffice
-    environment:
-      # LibreOffice conversions serialize on a process lock; with the
-      # worker pool firing big decks in parallel the default 30s api
-      # timeout 503s while queued.
-      - GOTENBERG_API_TIMEOUT=600s
+    # Flag, not env: LibreOffice conversions serialize on a process lock
+    # and heavy decks exceed the default 30s api timeout -> 503s (the
+    # env var did not reliably override in 8.32).
+    command: ["gotenberg", "--api-timeout=600s"]
     restart: unless-stopped
 
   paddle-ocr:
