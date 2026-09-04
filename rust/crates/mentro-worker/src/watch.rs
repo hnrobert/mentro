@@ -56,10 +56,18 @@ impl WatchHub {
     /// Drain all pending events across all watchers (non-blocking).
     /// Returns FsMessage frames ready to send to the server.
     pub fn drain(&mut self) -> Vec<FsMessage> {
+        use notify::event::ModifyKind;
         let mut out = Vec::new();
         for (rx, sid) in &self.receivers {
             while let Ok(event) = rx.try_recv() {
                 if let Ok(ev) = event {
+                    // Metadata-only modifies are read noise: reading a
+                    // file through a read-only mount still bumps the
+                    // host atime, which would flood the watcher and
+                    // starve the server-side debounce during indexing.
+                    if matches!(ev.kind, EventKind::Modify(ModifyKind::Metadata(_))) {
+                        continue;
+                    }
                     for path in &ev.paths {
                         if let Some(p) = path.to_str() {
                             out.push(FsMessage {

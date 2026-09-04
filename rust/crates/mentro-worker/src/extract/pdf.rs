@@ -85,11 +85,16 @@ fn extract_layout(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
         let page_no = idx + 1;
         let mut text = layout::render_page(page, &heading_map, &mut h1_emitted);
 
-        let title = first_heading(&text)
-            .map(|h| h.chars().take(120).collect())
-            .unwrap_or_default();
-
-        if page.blocks.is_empty() {
+        // Whole-page OCR for textless pages AND for pages whose "text"
+        // layer is font-encoding garbage (broken ToUnicode maps, e.g.
+        // OmniGraffle/Quartz exports): the glyphs decode confidently to
+        // random rare codepoints, so no extractor can recover them —
+        // OCR is the only honest source.
+        let garbage = looks_like_mojibake(&text);
+        if page.blocks.is_empty() || garbage {
+            if garbage {
+                text.clear();
+            }
             // No text layer: scanned page -> render + whole-page OCR.
             if let Some(ocr_text) = ocr_rendered_page(path, page_no) {
                 text = if text.is_empty() {
@@ -119,6 +124,10 @@ fn extract_layout(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
             }
         }
 
+        let title = first_heading(&text)
+            .map(|h| h.chars().take(120).collect())
+            .unwrap_or_default();
+
         units.push(CMsgContentUnit {
             ordinal: page_no as i32,
             unit_type: EUnitType::Page as i32,
@@ -138,6 +147,40 @@ fn first_heading(markdown: &str) -> Option<&str> {
         .find(|l| l.starts_with('#'))
         .map(|l| l.trim_start_matches('#').trim())
         .filter(|l| !l.is_empty())
+}
+
+/// Garbage-text detector for broken ToUnicode font maps. Real documents
+/// (zh/en/mixed) live overwhelmingly in ASCII + common CJK + kana +
+/// fullwidth punctuation; encoding garbage lands in combining marks,
+/// bidi controls, exotic scripts, and CJK extension planes. When ≥30%
+/// of a ≥20-char page is implausible, the "text" is glyph noise.
+fn looks_like_mojibake(text: &str) -> bool {
+    let mut total = 0usize;
+    let mut plausible = 0usize;
+    for c in text.chars().filter(|c| !c.is_whitespace()) {
+        total += 1;
+        if plausible_char(c) {
+            plausible += 1;
+        }
+    }
+    if total < 20 {
+        return false;
+    }
+    (total - plausible) * 10 > total * 3
+}
+
+fn plausible_char(c: char) -> bool {
+    matches!(c as u32,
+        0x20..=0x7E            // ASCII
+        | 0xA0..=0x24F          // Latin-1 letters + extended Latin
+        | 0x2000..=0x200D       // punctuation + zero-width space
+        | 0x2010..=0x2027       // dashes/quotes (excl. bidi controls)
+        | 0x3000..=0x303F       // CJK punctuation
+        | 0x3040..=0x30FF       // kana
+        | 0x4E00..=0x9FFF       // CJK unified (common)
+        | 0xAC00..=0xD7AF       // hangul syllables
+        | 0xFF00..=0xFFEF       // fullwidth forms
+    )
 }
 
 // --- embedded images ---
@@ -251,4 +294,25 @@ fn ocr_rendered_page(pdf: &Path, page: usize) -> Option<String> {
     let result = ocr::ocr_image(&png).ok().flatten();
     let _ = std::fs::remove_dir_all(&dir);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Real output of an OmniGraffle/Quartz export with a broken
+    /// ToUnicode map (user-reported roadmap.pdf).
+    #[test]
+    fn detects_broken_tounicode_garbage() {
+        let garbage = "ݗጱقऒఽᎣොໜ चԭහਁਏኞጱ၅Ꮯ௔҅ᬰ ᘒ൉ṛ";
+        assert!(looks_like_mojibake(garbage));
+    }
+
+    #[test]
+    fn keeps_real_chinese_and_english() {
+        let real = "港口物流系统：货物仓储、运输管理与海关清关 including English words, 2026.";
+        assert!(!looks_like_mojibake(real));
+        assert!(!looks_like_mojibake("短文本"));
+        assert!(!looks_like_mojibake(""));
+    }
 }

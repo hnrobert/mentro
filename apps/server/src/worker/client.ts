@@ -5,6 +5,7 @@ import {
   EmbedRequestSchema,
   ExportRequestSchema,
   ExtractRequestSchema,
+  RenderRequestSchema,
   RequestSchema,
   ScanRequestSchema,
   TranscribeRequestSchema,
@@ -251,6 +252,32 @@ export class WorkerClient {
   async embed(texts: string[], timeoutMs?: number): Promise<Response> {
     return this.request(
       { case: "embed", value: create(EmbedRequestSchema, { texts }) },
+      timeoutMs,
+    );
+  }
+
+  /** Lazy-render one page (thumbs route render-on-miss). */
+  async renderPage(
+    fields: {
+      assetId: string;
+      path: string;
+      ordinal: number;
+      contentHash?: string;
+      full?: boolean;
+    },
+    timeoutMs?: number,
+  ): Promise<Response> {
+    return this.request(
+      {
+        case: "render",
+        value: create(RenderRequestSchema, {
+          assetId: fields.assetId,
+          contentHash: fields.contentHash ?? "",
+          ordinal: fields.ordinal,
+          want: fields.full ? 2 : 1,
+          path: fields.path,
+        }),
+      },
       timeoutMs,
     );
   }

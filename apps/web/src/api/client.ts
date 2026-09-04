@@ -81,6 +81,24 @@ export async function api<T = unknown>(
   return (await res.json()) as T;
 }
 
+/** Authed binary fetch (thumbnails/previews); <img> cannot send the
+ * bearer header, so callers turn the blob into an object URL. */
+export async function apiBlob(path: string, retry = true): Promise<Blob> {
+  const auth = loadAuth();
+  const res = await fetch(path, {
+    headers: auth?.accessToken
+      ? { authorization: `Bearer ${auth.accessToken}` }
+      : undefined,
+  });
+  if (res.status === 401 && retry && !path.startsWith("/api/auth/")) {
+    if (await tryRefresh()) return apiBlob(path, false);
+    clearAuth();
+    window.dispatchEvent(new CustomEvent("mentro:unauthorized"));
+  }
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  return res.blob();
+}
+
 export interface AuthResponse extends StoredAuth {
   user: { id: string; username: string; role: string; enabled: boolean };
 }

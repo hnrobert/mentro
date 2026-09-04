@@ -92,6 +92,7 @@ message RenderRequest {
   string content_hash = 2;
   int32 ordinal = 3;
   ERenderWant want = 4;
+  string path = 5; // source file (server-resolved); empty = legacy cover path
 }
 
 enum ERenderWant {

@@ -113,8 +113,9 @@ onMounted(() => {
       </div>
     </aside>
 
-    <!-- Main -->
-    <main class="min-w-0 flex-1 overflow-hidden">
+    <!-- Main: page-level vertical scroll. Views that manage their own
+         height (Library) fill h-full and never overflow this. -->
+    <main class="min-w-0 flex-1 overflow-y-auto">
       <RouterView @library-changed="refreshCount" />
     </main>
 

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import Button from "@/components/ui/Button.vue";
-import { api } from "@/api/client";
+import { api, apiBlob } from "@/api/client";
 import { moveAsset, fetchGroups, type GroupNode } from "@/api/library";
 import PdfPreview from "@/components/PdfPreview.vue";
 
@@ -80,6 +80,38 @@ function flatten(nodes: GroupNode[]): GroupNode[] {
 function previewUrl(): string {
   return `/api/assets/${route.params.id}/file`;
 }
+
+// --- per-page preview (lazy render-on-miss via /api/thumbs) ---
+
+const RENDERABLE = new Set(["pdf", "presentation", "document"]);
+const renderable = computed(() => RENDERABLE.has(asset.value?.kind ?? ""));
+const previews = ref(new Map<string, string>()); // unitId -> object URL
+const previewLoading = ref(new Set<string>());
+const previewFailed = ref(new Set<string>());
+
+async function loadPreview(u: DetailUnit): Promise<void> {
+  if (!renderable.value) return;
+  if (
+    previews.value.has(u.id) ||
+    previewLoading.value.has(u.id) ||
+    previewFailed.value.has(u.id)
+  ) {
+    return;
+  }
+  previewLoading.value.add(u.id);
+  try {
+    const blob = await apiBlob(`/api/thumbs/${u.id}`);
+    previews.value.set(u.id, URL.createObjectURL(blob));
+  } catch {
+    previewFailed.value.add(u.id); // no preview for this page
+  } finally {
+    previewLoading.value.delete(u.id);
+  }
+}
+
+onUnmounted(() => {
+  for (const url of previews.value.values()) URL.revokeObjectURL(url);
+});
 
 onMounted(() => {
   void load();
@@ -168,6 +200,7 @@ onMounted(() => {
           v-for="u in units"
           :key="u.id"
           class="rounded-lg border p-3 text-sm"
+          @toggle="($event.target as HTMLDetailsElement).open && loadPreview(u)"
         >
           <summary class="cursor-pointer select-none font-medium">
             {{ u.unitType }} {{ u.ordinal }}
@@ -175,6 +208,18 @@ onMounted(() => {
               {{ u.title.slice(0, 60) }}
             </span>
           </summary>
+          <img
+            v-if="previews.has(u.id)"
+            :src="previews.get(u.id)"
+            :alt="`${u.unitType} ${u.ordinal} preview`"
+            class="mt-2 max-h-[420px] rounded-md border object-contain"
+          />
+          <p
+            v-else-if="previewLoading.has(u.id)"
+            class="mt-2 text-xs text-muted-foreground"
+          >
+            Rendering page preview…
+          </p>
           <pre
             class="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground"
             >{{ u.text || "(no text)" }}</pre>

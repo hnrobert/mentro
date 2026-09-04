@@ -145,7 +145,7 @@ async function main(): Promise<void> {
   });
   registerAdminRoutes(app, { jwtSecret });
   registerSourceRoutes(app, { worker });
-  registerAssetRoutes(app);
+  registerAssetRoutes(app, worker);
   registerLibraryRoutes(app);
   registerSearchRoutes(app, worker);
   registerJobRoutes(app);

@@ -17,8 +17,8 @@ use crate::{
     error::{WorkerError, WorkerResult},
     export, extract,
     proto::mentro::worker::v1::{
-        ECapability, ErrorInfo, ReadyMessage, Request, Response, ScanResult, WorkerFrame,
-        request::Body as ReqBody, response, worker_frame::Body,
+        ECapability, ERenderWant, ErrorInfo, ReadyMessage, Request, Response, ScanResult,
+        WorkerFrame, request::Body as ReqBody, response, worker_frame::Body,
     },
     scan, tools, transcribe, unpack, watch,
 };
@@ -100,6 +100,34 @@ fn handle(req: Request) -> WorkerResult<response::Result> {
         Some(ReqBody::Embed(r)) => {
             let result = embed::embed(&r)?;
             Ok(response::Result::EmbedResult(result))
+        }
+        Some(ReqBody::Render(r)) => {
+            // Lazy page rendering (the thumbs route's render-on-miss).
+            // Legacy callers that omit the path fall back to the
+            // extract-time cover flow.
+            let path = if r.path.is_empty() {
+                // No source path: cannot render — treat as a miss.
+                return Err(WorkerError::invalid("render needs a source path"));
+            } else {
+                r.path.clone()
+            };
+            let want_full = r.want == ERenderWant::Full as i32;
+            let thumb = crate::extract::render::page_thumb_wide(
+                std::path::Path::new(&path),
+                &r.asset_id,
+                r.ordinal.max(1) as u32,
+                want_full,
+            )
+            .ok_or_else(|| {
+                WorkerError::new(
+                    crate::proto::mentro::worker::v1::EErrorCode::ToolNonZeroExit,
+                    "page render produced no output",
+                    true,
+                )
+            })?;
+            Ok(response::Result::RenderResult(
+                crate::proto::mentro::worker::v1::RenderResult { thumb_path: thumb },
+            ))
         }
         Some(ReqBody::Stat(r)) => {
             let stats: Vec<_> = r

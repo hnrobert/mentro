@@ -3,8 +3,15 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { AppDataSource } from "../db/data-source";
 import { Asset, ContentUnit } from "../db/entities";
+import type { WorkerClient } from "../worker/client";
 
-export function registerAssetRoutes(app: FastifyInstance) {
+/** Kinds whose pages can be lazily rendered to preview images. */
+const RENDERABLE = new Set(["pdf", "presentation", "document"]);
+
+export function registerAssetRoutes(
+  app: FastifyInstance,
+  worker?: WorkerClient,
+) {
   app.get<{
     Querystring: {
       kind?: string;
@@ -65,18 +72,49 @@ export function registerAssetRoutes(app: FastifyInstance) {
     },
   );
 
-  // Thumbnail for a content unit (lazy-render trigger point).
+  // Thumbnail for a content unit; lazily renders the page on first
+  // request (render-on-miss) for pdf/office kinds.
   app.get<{ Params: { unitId: string } }>(
     "/api/thumbs/:unitId",
     async (request, reply) => {
       const unit = await AppDataSource.getRepository(ContentUnit).findOneBy({
         id: request.params.unitId,
       });
-      if (!unit?.thumbPath) {
-        return reply.code(404).send({ error: "no thumbnail" });
+      if (!unit) {
+        return reply.code(404).send({ error: "unit not found" });
       }
       const dataDir = process.env.MENTRO_DATA ?? "./data";
-      const file = path.join(dataDir, unit.thumbPath);
+
+      let thumbPath = unit.thumbPath;
+      if (!thumbPath && worker) {
+        // Render-on-miss: ask the worker to render this page once.
+        const asset = await AppDataSource.getRepository(Asset).findOneBy({
+          id: unit.assetId,
+        });
+        if (asset && RENDERABLE.has(asset.kind) && fs.existsSync(asset.path)) {
+          const resp = await worker.renderPage(
+            {
+              assetId: asset.id,
+              path: asset.path,
+              ordinal: unit.ordinal,
+              contentHash: asset.contentHash ?? "",
+            },
+            5 * 60 * 1000,
+          );
+          if (resp.ok && resp.result?.case === "renderResult") {
+            thumbPath = resp.result.value.thumbPath;
+            await AppDataSource.getRepository(ContentUnit).update(
+              { id: unit.id },
+              { thumbPath },
+            );
+          }
+        }
+      }
+
+      if (!thumbPath) {
+        return reply.code(404).send({ error: "no thumbnail" });
+      }
+      const file = path.join(dataDir, thumbPath);
       if (!fs.existsSync(file)) {
         return reply.code(404).send({ error: "not rendered" });
       }
