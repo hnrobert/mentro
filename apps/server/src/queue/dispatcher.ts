@@ -1,4 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
 import { ulid } from "ulid";
+import AdmZip from "adm-zip";
 import { AppDataSource } from "../db/data-source";
 import { serializedTx } from "../db/tx";
 import { Asset, ContentUnit, Job, UnitEmbedding } from "../db/entities";
@@ -38,10 +41,26 @@ export interface DispatcherEvents {
 
 export interface ExportJobPayload {
   units: Array<{ assetId: string; ordinal: number }>;
-  format: "pdf" | "pptx";
+  format: "pdf" | "pptx" | "native" | "original";
   nameHint: string;
   artifactPath?: string;
+  /** Per-source artifact names (zip entries when bundled). */
+  artifacts?: string[];
   createdBy?: string | null;
+}
+
+/** Bundle multiple artifacts into one zip under data/exports. */
+function zipArtifacts(
+  jobId: string,
+  files: Array<{ path: string; name: string }>,
+): string {
+  const zip = new AdmZip();
+  for (const f of files) zip.addLocalFile(f.path, "", f.name);
+  const outDir = path.join(process.env.MENTRO_DATA ?? "./data", "exports");
+  fs.mkdirSync(outDir, { recursive: true });
+  const out = path.join(outDir, `${jobId}.zip`);
+  zip.writeZip(out);
+  return `exports/${jobId}.zip`;
 }
 
 export class Dispatcher {
@@ -443,49 +462,158 @@ export class Dispatcher {
       return;
     }
     try {
-      // Resolve unit refs to file paths for the worker.
       const assetRepo = AppDataSource.getRepository(Asset);
-      const units: Array<{ assetId: string; ordinal: number; path: string }> =
-        [];
-      for (const ref of payload.units) {
-        const asset = await assetRepo.findOneBy({ id: ref.assetId });
-        if (!asset) {
-          await this.failExport(job, `asset ${ref.assetId} not found`);
-          return;
+      const byId = new Map<string, Asset>();
+      const resolve = async (assetId: string): Promise<Asset | null> => {
+        if (!byId.has(assetId)) {
+          const found: Asset | null = await assetRepo.findOneBy({
+            id: assetId,
+          });
+          byId.set(assetId, found as Asset);
         }
-        units.push({
-          assetId: asset.id,
-          ordinal: ref.ordinal,
-          path: asset.path,
-        });
-      }
-      const resp = await worker.exportUnits(
-        {
+        return byId.get(assetId) ?? null;
+      };
+
+      const artifacts: Array<{ path: string; name: string }> = [];
+
+      if (payload.format === "original") {
+        // Unmodified original files, one entry per distinct asset.
+        const seen = new Set<string>();
+        for (const ref of payload.units) {
+          if (seen.has(ref.assetId)) continue;
+          seen.add(ref.assetId);
+          const asset = await resolve(ref.assetId);
+          if (!asset || !fs.existsSync(asset.path)) {
+            await this.failExport(job, `original missing: ${ref.assetId}`);
+            return;
+          }
+          artifacts.push({
+            path: asset.path,
+            name: asset.path.split("/").pop() ?? `${asset.id}`,
+          });
+        }
+      } else if (payload.format === "pdf") {
+        // One merged pdf across files (agent flow).
+        const units: Array<{ assetId: string; ordinal: number; path: string }> =
+          [];
+        for (const ref of payload.units) {
+          const asset = await resolve(ref.assetId);
+          if (!asset) {
+            await this.failExport(job, `asset ${ref.assetId} not found`);
+            return;
+          }
+          units.push({
+            assetId: asset.id,
+            ordinal: ref.ordinal,
+            path: asset.path,
+          });
+        }
+        const got = await this.workerExport(
+          worker,
+          job.id,
           units,
-          format: payload.format === "pdf" ? 1 : 2,
-          nameHint: payload.nameHint || job.id,
-        },
-        10 * 60 * 1000,
-      );
-      if (resp.ok && resp.result?.case === "exportResult") {
-        const artifactPath = resp.result.value.path;
-        await AppDataSource.getRepository(Job).update(
-          { id: job.id },
-          {
-            status: "done",
-            payload: JSON.stringify({ ...payload, artifactPath }),
-            error: null,
-            updatedAt: new Date(),
-          },
+          1,
+          payload.nameHint || job.id,
         );
-        await this.emitJob(job.id);
-        return;
+        if (!got) return; // failure recorded
+        artifacts.push(got);
+      } else {
+        // "pptx" / "native": crop PER SOURCE FILE (keeps each deck's
+        // theme and masters — only unselected pages are dropped), then
+        // zip when the selection spans several files.
+        const groups = new Map<string, number[]>(); // assetId -> ordinals
+        for (const ref of payload.units) {
+          const list = groups.get(ref.assetId) ?? [];
+          list.push(ref.ordinal);
+          groups.set(ref.assetId, list);
+        }
+        for (const [assetId, ordinals] of groups) {
+          const asset = await resolve(assetId);
+          if (!asset) {
+            await this.failExport(job, `asset ${assetId} not found`);
+            return;
+          }
+          const fmt =
+            payload.format === "pptx" || asset.kind === "presentation"
+              ? "pptx"
+              : "pdf";
+          const units = ordinals.map((ordinal) => ({
+            assetId: asset.id,
+            ordinal,
+            path: asset.path,
+          }));
+          const base = (asset.path.split("/").pop() ?? asset.id).replace(
+            /\.(pptx|pdf|docx|ppt|doc)$/i,
+            "",
+          );
+          const got = await this.workerExport(
+            worker,
+            job.id,
+            units,
+            fmt === "pptx" ? 2 : 1,
+            `${base}-${fmt}`,
+          );
+          if (!got) return; // failure recorded
+          artifacts.push(got);
+        }
       }
-      await this.failExport(job, resp.error?.message ?? "export failed");
+
+      // Single artifact downloads directly; several land in one zip.
+      const artifactPath =
+        artifacts.length === 1
+          ? artifacts[0].path
+          : zipArtifacts(job.id, artifacts);
+      await AppDataSource.getRepository(Job).update(
+        { id: job.id },
+        {
+          status: "done",
+          payload: JSON.stringify({
+            ...payload,
+            artifactPath,
+            artifacts: artifacts.map((a) => a.name),
+          }),
+          error: null,
+          updatedAt: new Date(),
+        },
+      );
+      await this.emitJob(job.id);
     } catch (err) {
       const attempts = job.attempts + 1;
       await this.failJob(job, attempts < MAX_ATTEMPTS, attempts, String(err));
     }
+  }
+
+  /** One worker export call; records failure on the job and returns null. */
+  private async workerExport(
+    worker: WorkerClient,
+    jobId: string,
+    units: Array<{ assetId: string; ordinal: number; path: string }>,
+    format: number,
+    nameHint: string,
+  ): Promise<{ path: string; name: string } | null> {
+    const resp = await worker.exportUnits(
+      { units, format, nameHint },
+      10 * 60 * 1000,
+    );
+    if (resp.ok && resp.result?.case === "exportResult") {
+      const rel = resp.result.value.path; // exports/<name>.<ext>
+      const dataDir = process.env.MENTRO_DATA ?? "./data";
+      return {
+        path: path.join(dataDir, rel),
+        name: rel.split("/").pop() ?? nameHint,
+      };
+    }
+    await this.failExportById(jobId, resp.error?.message ?? "export failed");
+    return null;
+  }
+
+  private async failExportById(jobId: string, message: string): Promise<void> {
+    await AppDataSource.getRepository(Job).update(
+      { id: jobId },
+      { status: "failed", error: message, updatedAt: new Date() },
+    );
+    const job = await AppDataSource.getRepository(Job).findOneBy({ id: jobId });
+    if (job) this.events.onJobUpdate?.(job);
   }
 
   private async failExport(job: Job, message: string): Promise<void> {
@@ -558,7 +686,14 @@ export function parseExportPayload(
   try {
     const parsed = JSON.parse(raw) as ExportJobPayload;
     if (!Array.isArray(parsed.units) || parsed.units.length === 0) return null;
-    if (parsed.format !== "pdf" && parsed.format !== "pptx") return null;
+    if (
+      parsed.format !== "pdf" &&
+      parsed.format !== "pptx" &&
+      parsed.format !== "native" &&
+      parsed.format !== "original"
+    ) {
+      return null;
+    }
     return parsed;
   } catch {
     return null;

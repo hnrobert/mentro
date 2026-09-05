@@ -5,8 +5,10 @@ import Button from "@/components/ui/Button.vue";
 import { api, apiBlob } from "@/api/client";
 import { moveAsset, fetchGroups, type GroupNode } from "@/api/library";
 import PdfPreview from "@/components/PdfPreview.vue";
+import { useCartStore } from "@/stores/cart";
 
 const route = useRoute();
+const cart = useCartStore();
 
 interface DetailAsset {
   id: string;
@@ -125,6 +127,48 @@ function retryPreview(): void {
   void loadPreview(u);
 }
 
+// --- cart: multi-select croppable pages (page/slide units) ---
+
+const selectable = (u: DetailUnit) =>
+  u.unitType === "page" || u.unitType === "slide";
+const selectableUnits = computed(() => units.value.filter(selectable));
+const allSelected = computed(
+  () =>
+    selectableUnits.value.length > 0 &&
+    selectableUnits.value.every((u) => cart.has(u.id)),
+);
+
+function toggleCart(u: DetailUnit): void {
+  cart.toggle({
+    unitId: u.id,
+    assetId: String(route.params.id),
+    ordinal: u.ordinal,
+    unitType: u.unitType,
+    title: u.title,
+    fileName: asset.value?.path.split("/").pop() ?? "file",
+  });
+}
+
+function toggleAll(): void {
+  const target = selectableUnits.value;
+  if (allSelected.value) {
+    for (const u of target) {
+      if (cart.has(u.id)) cart.remove(u.id);
+    }
+  } else {
+    cart.addMany(
+      target.map((u) => ({
+        unitId: u.id,
+        assetId: String(route.params.id),
+        ordinal: u.ordinal,
+        unitType: u.unitType,
+        title: u.title,
+        fileName: asset.value?.path.split("/").pop() ?? "file",
+      })),
+    );
+  }
+}
+
 onUnmounted(() => {
   for (const url of previews.value.values()) URL.revokeObjectURL(url);
 });
@@ -210,18 +254,39 @@ onMounted(() => {
         </div>
 
         <!-- Content units -->
-        <h2 class="mb-2 text-sm font-semibold text-muted-foreground">
-          Content Units（{{ units.length }}）
-        </h2>
+        <div class="mb-2 flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-muted-foreground">
+            Content Units（{{ units.length }}）
+          </h2>
+          <button
+            v-if="selectableUnits.length > 0"
+            class="text-xs text-muted-foreground hover:underline"
+            @click="toggleAll"
+          >
+            {{ allSelected ? "deselect all" : "select all pages" }}
+            ({{ cart.items.filter((i) => i.assetId === asset?.id).length }} in
+            cart)
+          </button>
+        </div>
         <div class="space-y-2">
           <details
             v-for="u in units"
             :key="u.id"
             class="rounded-lg border p-3 text-sm transition-colors"
-            :class="active?.id === u.id ? 'border-primary/60' : ''"
+            :class="[
+              active?.id === u.id ? 'border-primary/60' : '',
+              cart.has(u.id) ? 'bg-accent/30' : '',
+            ]"
             @toggle="($event.target as HTMLDetailsElement).open && setActive(u)"
           >
             <summary class="cursor-pointer select-none font-medium">
+              <input
+                v-if="selectable(u)"
+                type="checkbox"
+                class="mr-2 align-middle"
+                :checked="cart.has(u.id)"
+                @click.stop="toggleCart(u)"
+              />
               {{ u.unitType }} {{ u.ordinal }}
               <span v-if="u.title" class="ml-2 text-muted-foreground">
                 {{ u.title.slice(0, 60) }}

@@ -25,6 +25,8 @@
     "color",
     "Contentless",
     "cpus",
+    "croppability",
+    "croppable",
     "cuda",
     "daemonizing",
     "darwin",

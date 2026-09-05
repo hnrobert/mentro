@@ -2,10 +2,13 @@
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
+import { useCartStore } from "@/stores/cart";
 import { api } from "@/api/client";
 import UploadModal from "@/components/UploadModal.vue";
+import CartModal from "@/components/CartModal.vue";
 
 const auth = useAuthStore();
+const cart = useCartStore();
 const router = useRouter();
 const route = useRoute();
 
@@ -15,6 +18,7 @@ const isAdmin = computed(() => auth.user?.role === "super_admin");
 const showSidebar = computed(() => route.name !== "login");
 
 const uploadOpen = ref(false);
+const cartOpen = ref(false);
 
 async function refreshCount(): Promise<void> {
   try {
@@ -84,12 +88,27 @@ onMounted(() => {
         </button>
       </nav>
       <div class="border-t p-3">
-        <button
-          class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent"
-          @click="uploadOpen = true"
-        >
-          Upload
-        </button>
+        <div class="mb-2 flex gap-2">
+          <button
+            class="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent"
+            @click="uploadOpen = true"
+          >
+            Upload
+          </button>
+          <button
+            class="relative rounded-md border border-input bg-background px-3 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent"
+            title="Selected pages"
+            @click="cartOpen = true"
+          >
+            🛒
+            <span
+              v-if="cart.count > 0"
+              class="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold text-primary-foreground"
+            >
+              {{ cart.count }}
+            </span>
+          </button>
+        </div>
         <div
           v-if="auth.user"
           class="mt-3 flex items-center justify-between px-1 text-xs text-muted-foreground"
@@ -124,5 +143,7 @@ onMounted(() => {
       @close="uploadOpen = false"
       @uploaded="refreshCount"
     />
+
+    <CartModal v-if="cartOpen" @close="cartOpen = false" />
   </div>
 </template>

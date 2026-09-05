@@ -46,6 +46,9 @@ importers:
       "@mentro/protocol":
         specifier: workspace:*
         version: link:../../packages/protocol
+      adm-zip:
+        specifier: ^0.6.0
+        version: 0.6.0
       argon2:
         specifier: ^0.44.0
         version: 0.44.0
@@ -71,6 +74,9 @@ importers:
         specifier: ^2.1.0
         version: 2.4.0
     devDependencies:
+      "@types/adm-zip":
+        specifier: ^0.5.8
+        version: 0.5.8
       "@types/better-sqlite3":
         specifier: ^7.6.13
         version: 7.6.13
@@ -1841,6 +1847,12 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
+  "@types/adm-zip@0.5.8":
+    resolution:
+      {
+        integrity: sha512-RVVH7QvZYbN+ihqZ4kX/dMiowf6o+Jk1fNwiSdx0NahBJLU787zkULhGhJM8mf/obmLGmgdMM0bXsQTmyfbR7Q==,
+      }
+
   "@types/better-sqlite3@7.6.13":
     resolution:
       {
@@ -2167,6 +2179,13 @@ packages:
       }
     engines: { node: ">=0.4.0" }
     hasBin: true
+
+  adm-zip@0.6.0:
+    resolution:
+      {
+        integrity: sha512-XleryMhbuksdKtofnWZ9Sk+4CUTbms4Mb/EU32SZwToAyZ5RgVos/ki8n+yr0LWHOGKuakbXTuuYNHLQjhddgg==,
+      }
+    engines: { node: ">=14.0" }
 
   ajv-formats@3.0.1:
     resolution:
@@ -5422,6 +5441,10 @@ snapshots:
       tailwindcss: 4.3.3
       vite: 7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0)
 
+  "@types/adm-zip@0.5.8":
+    dependencies:
+      "@types/node": 24.13.3
+
   "@types/better-sqlite3@7.6.13":
     dependencies:
       "@types/node": 24.13.3
@@ -5693,6 +5716,8 @@ snapshots:
       acorn: 8.18.0
 
   acorn@8.18.0: {}
+
+  adm-zip@0.6.0: {}
 
   ajv-formats@3.0.1(ajv@8.20.0):
     optionalDependencies:

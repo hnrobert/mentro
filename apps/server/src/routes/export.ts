@@ -6,9 +6,22 @@ import { AppDataSource } from "../db/data-source";
 import { Asset, Job } from "../db/entities";
 import { parseExportPayload } from "../queue/dispatcher";
 
+/**
+ * Export formats:
+ * - "pdf"      — all selected pages merged into ONE pdf (agent flow)
+ * - "pptx"     — slides cropped from each source deck (verbatim parts);
+ *                multiple decks are zipped
+ * - "native"   — cart flow: per-file crop in the file's own format
+ *                (deck → cropped pptx, document/pdf → cropped pdf);
+ *                multiple files are zipped
+ * - "original" — unmodified original files, zipped when more than one
+ */
+
+type ExportFormat = "pdf" | "pptx" | "native" | "original";
+
 interface ExportBody {
   units: Array<{ assetId: string; ordinal: number }>;
-  format: "pdf" | "pptx";
+  format: ExportFormat;
   nameHint?: string;
 }
 
@@ -18,30 +31,50 @@ export async function createExportJob(
   request: FastifyRequest,
   body: ExportBody,
 ): Promise<{ jobId: string } | { error: string; code: number }> {
+  const formats: ExportFormat[] = ["pdf", "pptx", "native", "original"];
   if (
     !Array.isArray(body.units) ||
     body.units.length === 0 ||
     body.units.length > 500 ||
-    (body.format !== "pdf" && body.format !== "pptx")
+    !formats.includes(body.format)
   ) {
-    return { error: "body: units[] (1..500) + format pdf|pptx", code: 400 };
+    return {
+      error: "body: units[] (1..500) + format pdf|pptx|native|original",
+      code: 400,
+    };
   }
-  if (body.format === "pptx") {
+  if (body.format === "pptx" || body.format === "native") {
+    // pdf/office sources only — pages/slides are croppable, media is not
+    const assetRepo = AppDataSource.getRepository(Asset);
+    for (const ref of body.units) {
+      if (!ref.assetId || !Number.isInteger(ref.ordinal) || ref.ordinal < 1) {
+        return { error: "units need assetId + 1-based ordinal", code: 400 };
+      }
+    }
     const distinct = new Set(body.units.map((u) => u.assetId));
-    if (distinct.size > 1) {
-      return {
-        error: "pptx export accepts slides from a single presentation",
-        code: 400,
-      };
+    for (const assetId of distinct) {
+      const asset = await assetRepo.findOneBy({ id: assetId });
+      if (!asset) return { error: `asset ${assetId} not found`, code: 404 };
+      if (
+        asset.kind !== "presentation" &&
+        asset.kind !== "pdf" &&
+        asset.kind !== "document"
+      ) {
+        return {
+          error: `page cropping needs pdf/presentation/document sources, ${asset.path.split("/").pop()} is ${asset.kind}`,
+          code: 400,
+        };
+      }
     }
-  }
-  const assetRepo = AppDataSource.getRepository(Asset);
-  for (const ref of body.units) {
-    if (!ref.assetId || !Number.isInteger(ref.ordinal) || ref.ordinal < 1) {
-      return { error: "units need assetId + 1-based ordinal", code: 400 };
+  } else {
+    const assetRepo = AppDataSource.getRepository(Asset);
+    for (const ref of body.units) {
+      if (!ref.assetId || !Number.isInteger(ref.ordinal) || ref.ordinal < 1) {
+        return { error: "units need assetId + 1-based ordinal", code: 400 };
+      }
+      const asset = await assetRepo.findOneBy({ id: ref.assetId });
+      if (!asset) return { error: `asset ${ref.assetId} not found`, code: 404 };
     }
-    const asset = await assetRepo.findOneBy({ id: ref.assetId });
-    if (!asset) return { error: `asset ${ref.assetId} not found`, code: 404 };
   }
   const user = (request as unknown as { user?: { id: string } }).user;
   const job = await AppDataSource.getRepository(Job).save({
@@ -84,6 +117,7 @@ export function registerExportRoutes(app: FastifyInstance) {
         format: payload?.format,
         units: payload?.units,
         artifactPath: payload?.artifactPath ?? null,
+        artifacts: payload?.artifacts ?? [],
         error: job.error,
         createdAt: job.createdAt,
       };
@@ -115,9 +149,11 @@ export function registerExportRoutes(app: FastifyInstance) {
         `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
       );
       reply.type(
-        payload.format === "pdf"
-          ? "application/pdf"
-          : "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        payload.artifactPath.endsWith(".zip")
+          ? "application/zip"
+          : payload.format === "pptx"
+            ? "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            : "application/pdf",
       );
       return reply.send(fs.createReadStream(file));
     },
