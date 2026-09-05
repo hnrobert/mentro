@@ -105,6 +105,29 @@ async function main(): Promise<void> {
     }
   }
 
+  // Watch self-healing: inotify watches can silently drop (queue
+  // overflow, worker respawn loses WATCH_HUB state) while other subtrees
+  // keep delivering — re-register everything periodically. WatchHub's
+  // watch() is unwatch+watch, so this is idempotent.
+  const rewatch = setInterval(
+    () => {
+      void (async () => {
+        if (!pool.ready?.capabilities.includes(2)) return;
+        const sources = await AppDataSource.getRepository(Source).find();
+        for (const source of sources) {
+          pool
+            .primary()
+            .watch(source.id, source.rootPath)
+            .catch((err) =>
+              console.warn(`[watch] re-watch failed ${source.rootPath}:`, err),
+            );
+        }
+      })();
+    },
+    5 * 60 * 1000,
+  );
+  rewatch.unref();
+
   const app = Fastify({ logger: false, bodyLimit: 4 * 1024 * 1024 });
   await app.register(rateLimit, { global: false });
   await app.register(websocket);

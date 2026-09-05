@@ -31,7 +31,18 @@ pub fn extract(req: &ExtractRequest) -> WorkerResult<ExtractResult> {
         crate::proto::mentro::worker::v1::EAssetKind::Text => text::extract(path)?,
         crate::proto::mentro::worker::v1::EAssetKind::Pdf => pdf::extract(path)?,
         crate::proto::mentro::worker::v1::EAssetKind::Presentation => ooxml::extract_pptx(path)?,
-        crate::proto::mentro::worker::v1::EAssetKind::Document => ooxml::extract_docx(path)?,
+        crate::proto::mentro::worker::v1::EAssetKind::Document => {
+            // Word pagination is a RENDERING concept — the XML has no
+            // page structure beyond explicit breaks. Route documents
+            // through the cached Office->PDF render and reuse the PDF
+            // page pipeline (real page units, thumbnails, page-level
+            // search hits). Degrade to whole-file OOXML text when the
+            // office container is unavailable.
+            match render::ensure_pdf(path, &req.asset_id) {
+                Some(pdf) => pdf::extract(&pdf)?,
+                None => ooxml::extract_docx(path)?,
+            }
+        }
         crate::proto::mentro::worker::v1::EAssetKind::Spreadsheet => ooxml::extract_xlsx(path)?,
         crate::proto::mentro::worker::v1::EAssetKind::Image => {
             let is_heic = path
