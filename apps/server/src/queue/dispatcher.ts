@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ulid } from "ulid";
-import AdmZip from "adm-zip";
 import { AppDataSource } from "../db/data-source";
 import { serializedTx } from "../db/tx";
 import { Asset, ContentUnit, Job, UnitEmbedding } from "../db/entities";
@@ -47,20 +46,6 @@ export interface ExportJobPayload {
   /** Per-source artifact names (zip entries when bundled). */
   artifacts?: string[];
   createdBy?: string | null;
-}
-
-/** Bundle multiple artifacts into one zip under data/exports. */
-function zipArtifacts(
-  jobId: string,
-  files: Array<{ path: string; name: string }>,
-): string {
-  const zip = new AdmZip();
-  for (const f of files) zip.addLocalFile(f.path, "", f.name);
-  const outDir = path.join(process.env.MENTRO_DATA ?? "./data", "exports");
-  fs.mkdirSync(outDir, { recursive: true });
-  const out = path.join(outDir, `${jobId}.zip`);
-  zip.writeZip(out);
-  return `exports/${jobId}.zip`;
 }
 
 export class Dispatcher {
@@ -558,11 +543,25 @@ export class Dispatcher {
         }
       }
 
-      // Single artifact downloads directly; several land in one zip.
-      const artifactPath =
-        artifacts.length === 1
-          ? artifacts[0].path
-          : zipArtifacts(job.id, artifacts);
+      // Single artifact downloads directly; several land in one zip
+      // (worker-side STORED pack — streaming, no deflate burn).
+      let artifactPath = artifacts[0].path;
+      if (artifacts.length > 1) {
+        const packed = await worker.packFiles(
+          artifacts,
+          job.id,
+          10 * 60 * 1000,
+        );
+        if (packed.ok && packed.result?.case === "packResult") {
+          artifactPath = packed.result.value.path;
+        } else {
+          await this.failExportById(
+            job.id,
+            packed.error?.message ?? "pack failed",
+          );
+          return;
+        }
+      }
       await AppDataSource.getRepository(Job).update(
         { id: job.id },
         {

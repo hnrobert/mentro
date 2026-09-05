@@ -101,6 +101,10 @@ fn handle(req: Request) -> WorkerResult<response::Result> {
             let result = embed::embed(&r)?;
             Ok(response::Result::EmbedResult(result))
         }
+        Some(ReqBody::Pack(r)) => {
+            let result = export::pack(&r)?;
+            Ok(response::Result::PackResult(result))
+        }
         Some(ReqBody::Render(r)) => {
             // Lazy page rendering (the thumbs route's render-on-miss).
             // Legacy callers that omit the path fall back to the

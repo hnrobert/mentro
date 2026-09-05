@@ -43,6 +43,7 @@ message Request {
     UnpackRequest unpack = 12;
     TranscribeRequest transcribe = 13;
     EmbedRequest embed = 14;
+    PackRequest pack = 15;
   }
 }
 
@@ -174,6 +175,22 @@ message CMsgEmbedding {
   repeated float vector = 1;
 }
 
+// Bundle files into one zip (STORED — entries are already-compressed
+// documents; deflate would burn CPU for nothing). Server-side cart flow.
+message PackRequest {
+  repeated CMsgPackEntry entries = 1;
+  string out_name = 2; // artifact basename hint; unique suffix appended
+}
+
+message CMsgPackEntry {
+  string path = 1; // absolute source file
+  string name = 2; // entry name inside the zip
+}
+
+message PackResult {
+  string path = 1; // artifact path relative to the data dir
+}
+
 enum EExportFormat {
   E_EXPORT_FORMAT_UNSPECIFIED = 0;
   E_EXPORT_FORMAT_PDF = 1;
@@ -220,6 +237,7 @@ message Response {
     UnpackResult unpack_result = 15;
     TranscribeResult transcribe_result = 16;
     EmbedResult embed_result = 17;
+    PackResult pack_result = 18;
   }
 }
 

@@ -5,6 +5,7 @@ import {
   EmbedRequestSchema,
   ExportRequestSchema,
   ExtractRequestSchema,
+  PackRequestSchema,
   RenderRequestSchema,
   RequestSchema,
   ScanRequestSchema,
@@ -292,6 +293,21 @@ export class WorkerClient {
   ): Promise<Response> {
     return this.request(
       { case: "export", value: create(ExportRequestSchema, fields) },
+      timeoutMs,
+    );
+  }
+
+  /** Bundle files into one STORED zip (worker-side, streaming). */
+  async packFiles(
+    entries: Array<{ path: string; name: string }>,
+    outName: string,
+    timeoutMs?: number,
+  ): Promise<Response> {
+    return this.request(
+      {
+        case: "pack",
+        value: create(PackRequestSchema, { entries, outName }),
+      },
       timeoutMs,
     );
   }
