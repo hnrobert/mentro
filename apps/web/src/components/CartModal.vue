@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import Button from "@/components/ui/Button.vue";
-import { api, apiBlob } from "@/api/client";
+import { api, apiBlobProgress } from "@/api/client";
 import { useCartStore } from "@/stores/cart";
 
 /**
@@ -16,6 +16,38 @@ const cart = useCartStore();
 
 const busy = ref<"" | "native" | "original">("");
 const error = ref("");
+
+// Live progress: export phase (server job) -> transfer phase (bytes).
+const progress = ref<{
+  phase: "export" | "pack" | "transfer";
+  done: number;
+  total: number;
+} | null>(null);
+
+function fmtMB(n: number): string {
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
+const progressPct = computed(() => {
+  const p = progress.value;
+  if (!p) return 0;
+  if (p.phase === "transfer") {
+    return p.total > 0 ? Math.min(100, (p.done / p.total) * 100) : 0;
+  }
+  return p.total > 0 ? Math.min(100, (p.done / p.total) * 100) : 0;
+});
+
+const progressLabel = computed(() => {
+  const p = progress.value;
+  if (!p) return "";
+  if (p.phase === "export") {
+    return `Preparing file ${p.done}/${p.total}`;
+  }
+  if (p.phase === "pack") return "Packing zip…";
+  return p.total > 0
+    ? `Downloading ${fmtMB(p.done)} / ${fmtMB(p.total)}`
+    : `Downloading ${fmtMB(p.done)}`;
+});
 
 const croppableKinds = new Set(["pdf", "presentation", "document"]);
 const kindByAsset = ref(new Map<string, string>()); // assetId -> kind
@@ -47,17 +79,21 @@ interface ExportStatus {
   status: string;
   artifactPath: string | null;
   artifacts?: string[];
+  progress?: { phase: "export" | "pack"; done: number; total: number } | null;
   error?: string | null;
 }
 
 async function waitForJob(jobId: string): Promise<ExportStatus> {
   for (let i = 0; i < 600; i++) {
     const job = await api<ExportStatus>(`/api/export/${jobId}`);
+    if (job.progress) {
+      progress.value = { ...job.progress };
+    }
     if (job.status === "done") return job;
     if (job.status === "failed") {
       throw new Error(job.error ?? "export failed");
     }
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 500));
   }
   throw new Error("export timed out");
 }
@@ -75,6 +111,7 @@ async function download(mode: "native" | "original"): Promise<void> {
   if (cart.items.length === 0) return;
   error.value = "";
   busy.value = mode;
+  progress.value = { phase: "export", done: 0, total: 1 };
   try {
     await ensureKinds();
     // "original" ignores ordinals; one ref per distinct asset.
@@ -94,7 +131,13 @@ async function download(mode: "native" | "original"): Promise<void> {
     });
     const job = await waitForJob(jobId);
     if (!job.artifactPath) throw new Error("no artifact produced");
-    const blob = await apiBlob(`/api/export/${jobId}/file`);
+    progress.value = { phase: "transfer", done: 0, total: 0 };
+    const blob = await apiBlobProgress(
+      `/api/export/${jobId}/file`,
+      (loaded, total) => {
+        progress.value = { phase: "transfer", done: loaded, total };
+      },
+    );
     saveBlob(blob, job.artifactPath.split("/").pop() ?? `mentro-${mode}`);
     cart.clear();
     emit("close");
@@ -102,6 +145,7 @@ async function download(mode: "native" | "original"): Promise<void> {
     error.value = String(err);
   } finally {
     busy.value = "";
+    progress.value = null;
   }
 }
 </script>
@@ -172,6 +216,18 @@ async function download(mode: "native" | "original"): Promise<void> {
       </div>
 
       <div class="shrink-0 space-y-2 border-t p-4">
+        <div v-if="progress" class="space-y-1">
+          <div class="flex justify-between text-xs text-muted-foreground">
+            <span>{{ progressLabel }}</span>
+            <span>{{ progressPct.toFixed(0) }}%</span>
+          </div>
+          <div class="h-1.5 overflow-hidden rounded-full bg-muted">
+            <div
+              class="h-full rounded-full bg-primary transition-[width] duration-300"
+              :style="{ width: `${progressPct}%` }"
+            />
+          </div>
+        </div>
         <p v-if="error" class="text-xs text-destructive">{{ error }}</p>
         <Button
           class="w-full"

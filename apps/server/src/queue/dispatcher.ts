@@ -45,6 +45,8 @@ export interface ExportJobPayload {
   artifactPath?: string;
   /** Per-source artifact names (zip entries when bundled). */
   artifacts?: string[];
+  /** Live progress for the UI (updated as groups complete). */
+  progress?: { phase: "export" | "pack"; done: number; total: number };
   createdBy?: string | null;
 }
 
@@ -460,6 +462,31 @@ export class Dispatcher {
       };
 
       const artifacts: Array<{ path: string; name: string }> = [];
+      const setProgress = async (
+        phase: "export" | "pack",
+        done: number,
+        total: number,
+      ): Promise<void> => {
+        await AppDataSource.getRepository(Job).update(
+          { id: job.id },
+          {
+            payload: JSON.stringify({
+              ...payload,
+              progress: { phase, done, total },
+            }),
+            updatedAt: new Date(),
+          },
+        );
+      };
+
+      // Per-source groups drive the progress denominator.
+      const totalGroups =
+        payload.format === "original"
+          ? new Set(payload.units.map((u) => u.assetId)).size
+          : payload.format === "pdf"
+            ? 1
+            : new Set(payload.units.map((u) => u.assetId)).size;
+      await setProgress("export", 0, totalGroups);
 
       if (payload.format === "original") {
         // Unmodified original files, one entry per distinct asset.
@@ -502,6 +529,7 @@ export class Dispatcher {
         );
         if (!got) return; // failure recorded
         artifacts.push(got);
+        await setProgress("export", 1, 1);
       } else {
         // "pptx" / "native": crop PER SOURCE FILE (keeps each deck's
         // theme and masters — only unselected pages are dropped), then
@@ -540,6 +568,7 @@ export class Dispatcher {
           );
           if (!got) return; // failure recorded
           artifacts.push(got);
+          await setProgress("export", artifacts.length, totalGroups);
         }
       }
 
@@ -547,6 +576,7 @@ export class Dispatcher {
       // (worker-side STORED pack — streaming, no deflate burn).
       let artifactPath = artifacts[0].path;
       if (artifacts.length > 1) {
+        await setProgress("pack", 0, 1);
         const packed = await worker.packFiles(
           artifacts,
           job.id,

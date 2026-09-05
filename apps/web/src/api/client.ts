@@ -99,6 +99,45 @@ export async function apiBlob(path: string, retry = true): Promise<Blob> {
   return res.blob();
 }
 
+/** apiBlob with transfer progress (XHR onprogress; the server sets
+ * content-length on artifact routes so totals are known). */
+export function apiBlobProgress(
+  path: string,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<Blob> {
+  return new Promise<Blob>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", path);
+    xhr.responseType = "blob";
+    const auth = loadAuth();
+    if (auth?.accessToken) {
+      xhr.setRequestHeader("authorization", `Bearer ${auth.accessToken}`);
+    }
+    xhr.onprogress = (e) => {
+      if (e.lengthComputable || e.total > 0) {
+        onProgress(e.loaded, e.total);
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.response as Blob);
+      } else if (xhr.status === 401) {
+        tryRefresh()
+          .then((ok) =>
+            ok
+              ? apiBlobProgress(path, onProgress).then(resolve, reject)
+              : reject(new ApiError(401, "unauthorized")),
+          )
+          .catch(() => reject(new ApiError(401, "unauthorized")));
+      } else {
+        reject(new ApiError(xhr.status, `HTTP ${xhr.status}`));
+      }
+    };
+    xhr.onerror = () => reject(new ApiError(0, "network error"));
+    xhr.send();
+  });
+}
+
 export interface AuthResponse extends StoredAuth {
   user: { id: string; username: string; role: string; enabled: boolean };
 }

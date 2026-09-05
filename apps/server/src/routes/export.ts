@@ -118,6 +118,7 @@ export function registerExportRoutes(app: FastifyInstance) {
         units: payload?.units,
         artifactPath: payload?.artifactPath ?? null,
         artifacts: payload?.artifacts ?? [],
+        progress: payload?.progress ?? null,
         error: job.error,
         createdAt: job.createdAt,
       };
@@ -148,6 +149,8 @@ export function registerExportRoutes(app: FastifyInstance) {
         "content-disposition",
         `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
       );
+      // Known length lets the browser show real download progress.
+      reply.header("content-length", fs.statSync(file).size);
       reply.type(
         payload.artifactPath.endsWith(".zip")
           ? "application/zip"
