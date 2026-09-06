@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
-import { useRoute } from "vue-router";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import Button from "@/components/ui/Button.vue";
 import { api, apiBlob } from "@/api/client";
 import { moveAsset, fetchGroups, type GroupNode } from "@/api/library";
@@ -8,6 +8,7 @@ import PdfPreview from "@/components/PdfPreview.vue";
 import { useCartStore } from "@/stores/cart";
 
 const route = useRoute();
+const router = useRouter();
 const cart = useCartStore();
 
 interface DetailAsset {
@@ -46,22 +47,15 @@ async function load(): Promise<void> {
     asset.value = res.asset;
     units.value = res.units;
     // Deep link (?page=N from search): open at that page and scroll it
-    // into view; otherwise show the first page.
+    // into view; otherwise show the first page. No history push — the
+    // deep link itself IS the first entry.
     const page = Number(route.query.page);
     const target =
       Number.isInteger(page) && page >= 1
         ? units.value.find((u) => u.ordinal === page)
         : undefined;
-    setActive(target ?? units.value[0]);
-    if (target) {
-      await nextTick();
-      // Open the target's <details> block and center it.
-      const el = document.getElementById(`unit-${target.id}`);
-      if (el) {
-        el.setAttribute("open", "");
-        el.scrollIntoView({ block: "center", behavior: "smooth" });
-      }
-    }
+    setActive(target ?? units.value[0], { updateRoute: false });
+    if (target) await revealUnit(target);
   } catch (err) {
     error.value = String(err);
   } finally {
@@ -110,10 +104,46 @@ const previews = ref(new Map<string, string>()); // unitId -> object URL
 const loadingIds = ref(new Set<string>());
 const failedIds = ref(new Set<string>());
 
-function setActive(u: DetailUnit): void {
+/** One history entry per viewed page: Back returns to the previously
+ *  found page instead of leaving the file. */
+function setActive(u: DetailUnit, opts: { updateRoute?: boolean } = {}): void {
   active.value = u;
   void loadPreview(u);
+  const wantsRoute = opts.updateRoute ?? true;
+  const current = route.query.page;
+  const next = String(u.ordinal);
+  if (wantsRoute && current !== next) {
+    void router.push({
+      query: { ...route.query, page: next },
+    });
+  }
 }
+
+/** Open + scroll a unit into view (deep link / back navigation). */
+async function revealUnit(u: DetailUnit): Promise<void> {
+  await nextTick();
+  const el = document.getElementById(`unit-${u.id}`);
+  if (el) {
+    el.setAttribute("open", "");
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+}
+
+// Back/forward between page routes re-targets the view.
+watch(
+  () => route.query.page,
+  (page) => {
+    const n = Number(page);
+    const target =
+      Number.isInteger(n) && n >= 1
+        ? units.value.find((u) => u.ordinal === n)
+        : undefined;
+    if (target && target.id !== active.value?.id) {
+      setActive(target, { updateRoute: false });
+      void revealUnit(target);
+    }
+  },
+);
 
 async function loadPreview(u: DetailUnit): Promise<void> {
   if (!renderable.value) return;
