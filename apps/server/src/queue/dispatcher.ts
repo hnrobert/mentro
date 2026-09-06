@@ -573,8 +573,12 @@ export class Dispatcher {
       }
 
       // Single artifact downloads directly; several land in one zip
-      // (worker-side STORED pack — streaming, no deflate burn).
-      let artifactPath = artifacts[0].path;
+      // (worker-side STORED pack — streaming, no deflate burn). The
+      // payload stores paths RELATIVE to the data dir — the /file route
+      // joins + validates against it.
+      const dataDir = process.env.MENTRO_DATA ?? "./data";
+      const relOf = (abs: string) => path.relative(dataDir, abs);
+      let artifactPath = relOf(artifacts[0].path);
       if (artifacts.length > 1) {
         await setProgress("pack", 0, 1);
         const packed = await worker.packFiles(
