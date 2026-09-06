@@ -1,27 +1,57 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
 import Input from "@/components/ui/Input.vue";
 import { api } from "@/api/client";
-import { useAuthStore } from "@/stores/auth";
 import { useSearchIndexStore } from "@/stores/searchIndex";
-import type { SearchHit } from "@/search/engine";
-import PdfPreview from "@/components/PdfPreview.vue";
 
-const preview = ref<{ assetId: string; fileName: string; page: number } | null>(
-  null,
-);
+/**
+ * Home search. Centered hero layout; kind chips filter hits (client-side
+ * post-filter on the engine result — the bundle already carries kind).
+ * Clicking a hit navigates to the library detail view AT that page.
+ */
 
-function openPreview(hit: DisplayHit): void {
-  // PDF → in-browser viewer; Office/other → open the file inline (browser
-  // handles download; office thumbs land in the UI with the thumbs route).
-  preview.value = {
-    assetId: hit.assetId,
-    fileName: hit.fileName,
-    page: hit.ordinal,
-  };
+const KIND_FILTERS = [
+  { label: "All", value: "" },
+  { label: "PDF", value: "pdf" },
+  { label: "Slides", value: "presentation" },
+  { label: "Docs", value: "document" },
+  { label: "Sheets", value: "spreadsheet" },
+  { label: "Images", value: "image" },
+  { label: "Video", value: "video" },
+  { label: "Audio", value: "audio" },
+  { label: "Text", value: "text" },
+] as const;
+
+const router = useRouter();
+
+const query = ref("");
+const hits = ref<DisplayHit[]>([]);
+const searched = ref(false);
+const busy = ref(false);
+const error = ref("");
+const kindFilter = ref<string>("");
+
+const searchIndex = useSearchIndexStore();
+
+/** Render shape: engine hit + synthesized snippet parts. */
+interface DisplayHit {
+  unitId: string;
+  assetId: string;
+  ordinal: number;
+  unitType: string;
+  title: string | null;
+  fileName: string;
+  assetPath: string;
+  kind: string;
+  parts: SnippetPart[];
+}
+
+interface SnippetPart {
+  text: string;
+  hit: boolean;
 }
 
 /** Synthesize a snippet around the first term occurrence in the text. */
@@ -51,24 +81,6 @@ function buildSnippet(text: string, terms: string[]): SnippetPart[] {
   return parts;
 }
 
-/** Render shape: engine hit + synthesized snippet parts. */
-interface DisplayHit {
-  unitId: string;
-  assetId: string;
-  ordinal: number;
-  unitType: string;
-  title: string | null;
-  fileName: string;
-  assetPath: string;
-  kind: string;
-  parts: SnippetPart[];
-}
-
-interface SnippetPart {
-  text: string;
-  hit: boolean;
-}
-
 /** Split "[foo] bar [baz]" snippets into highlightable parts. */
 function parseSnippet(snippet: string | null): SnippetPart[] {
   if (!snippet) return [];
@@ -86,17 +98,6 @@ function parseSnippet(snippet: string | null): SnippetPart[] {
     parts.push({ text: snippet.slice(last), hit: false });
   return parts;
 }
-
-const router = useRouter();
-const auth = useAuthStore();
-
-const query = ref("");
-const hits = ref<DisplayHit[]>([]);
-const searched = ref(false);
-const busy = ref(false);
-const error = ref("");
-
-const searchIndex = useSearchIndexStore();
 
 interface ServerHit {
   unitId: string;
@@ -162,57 +163,108 @@ async function search() {
   }
 }
 
-const uploadMsg = ref("");
+const filteredHits = computed(() =>
+  kindFilter.value
+    ? hits.value.filter((h) => h.kind === kindFilter.value)
+    : hits.value,
+);
 
-const libraryCount = ref<number | null>(null);
+/** Per-kind hit counts for the chips (computed pre-filter). */
+const kindCounts = computed(() => {
+  const counts = new Map<string, number>();
+  for (const h of hits.value) counts.set(h.kind, (counts.get(h.kind) ?? 0) + 1);
+  return counts;
+});
+
+/** Navigate to the library detail view at the hit's page. */
+function openHit(hit: DisplayHit): void {
+  void router.push({
+    name: "asset-detail",
+    params: { id: hit.assetId },
+    query:
+      hit.unitType === "page" ||
+      hit.unitType === "slide" ||
+      hit.unitType === "sheet"
+        ? { page: String(hit.ordinal) }
+        : {},
+  });
+}
 
 onMounted(() => {
   void searchIndex.init();
-  void api<{ total: number }>("/api/library?pageSize=1")
-    .then((r) => (libraryCount.value = r.total))
-    .catch(() => (libraryCount.value = null));
 });
 </script>
 
 <template>
-  <div class="mx-auto max-w-3xl p-4 sm:p-6">
-    <div class="mb-4 flex items-center gap-3">
-      <form class="flex flex-1 gap-2" @submit.prevent="search">
+  <div class="mx-auto flex min-h-[70vh] max-w-2xl flex-col px-4">
+    <!-- Centered hero search -->
+    <div class="mb-6 mt-[16vh] text-center">
+      <h1 class="mb-5 text-2xl font-semibold tracking-tight">Mentro</h1>
+      <form class="mx-auto flex max-w-xl gap-2" @submit.prevent="search">
         <Input
           v-model="query"
-          placeholder="Search all content units (pages/slides)…"
+          placeholder="Search pages, slides, transcripts…"
+          class="flex-1"
         />
         <Button type="submit" :disabled="busy">Search</Button>
       </form>
     </div>
 
-    <p v-if="uploadMsg" class="mb-3 text-xs text-muted-foreground">
-      {{ uploadMsg }}
-    </p>
-
-    <!-- Library counter entry -->
-    <button
-      class="mb-4 flex w-full items-center justify-between rounded-lg border px-4 py-2 text-sm transition-colors hover:bg-accent/40"
-      @click="router.push({ name: 'library' })"
+    <!-- Kind filter chips -->
+    <div
+      v-if="searched && hits.length > 0"
+      class="mb-4 flex flex-wrap justify-center gap-1.5"
     >
-      <span class="text-muted-foreground">Library</span>
-      <span class="font-medium">{{ libraryCount ?? "…" }} files →</span>
-    </button>
+      <button
+        v-for="f in KIND_FILTERS"
+        :key="f.value"
+        class="rounded-full border px-3 py-1 text-xs transition-colors"
+        :class="
+          kindFilter === f.value
+            ? 'border-primary bg-primary text-primary-foreground'
+            : 'text-muted-foreground hover:bg-accent'
+        "
+        :disabled="f.value !== '' && !kindCounts.has(f.value)"
+        :title="
+          f.value === ''
+            ? 'all results'
+            : `${kindCounts.get(f.value) ?? 0} hits`
+        "
+        @click="kindFilter = f.value"
+      >
+        {{ f.label }}
+        <span
+          v-if="f.value !== '' && kindCounts.has(f.value)"
+          class="ml-1 opacity-70"
+        >
+          {{ kindCounts.get(f.value) }}
+        </span>
+      </button>
+    </div>
 
-    <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
+    <p v-if="error" class="text-center text-sm text-destructive">
+      {{ error }}
+    </p>
     <p
       v-else-if="searched && hits.length === 0"
-      class="text-sm text-muted-foreground"
+      class="text-center text-sm text-muted-foreground"
     >
       No results. Try different keywords or upload to the library.
+    </p>
+    <p
+      v-else-if="searched && filteredHits.length === 0"
+      class="text-center text-sm text-muted-foreground"
+    >
+      No {{ KIND_FILTERS.find((f) => f.value === kindFilter)?.label }} results —
+      pick another filter.
     </p>
 
     <div class="space-y-2">
       <Card
-        v-for="hit in hits"
+        v-for="hit in filteredHits"
         :key="hit.unitId"
         class="cursor-pointer p-3 hover:bg-accent/40"
-        @click="openPreview(hit)"
+        @click="openHit(hit)"
       >
         <div class="mb-1 flex items-baseline justify-between gap-2">
           <span class="truncate text-sm font-medium">{{ hit.fileName }}</span>
@@ -240,13 +292,5 @@ onMounted(() => {
         </p>
       </Card>
     </div>
-
-    <PdfPreview
-      v-if="preview"
-      :asset-id="preview.assetId"
-      :file-name="preview.fileName"
-      :initial-page="preview.page"
-      @close="preview = null"
-    />
   </div>
 </template>

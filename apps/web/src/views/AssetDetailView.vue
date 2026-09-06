@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import Button from "@/components/ui/Button.vue";
 import { api, apiBlob } from "@/api/client";
@@ -45,8 +45,23 @@ async function load(): Promise<void> {
     );
     asset.value = res.asset;
     units.value = res.units;
-    // Show the first page in the preview pane immediately.
-    if (units.value.length > 0) setActive(units.value[0]);
+    // Deep link (?page=N from search): open at that page and scroll it
+    // into view; otherwise show the first page.
+    const page = Number(route.query.page);
+    const target =
+      Number.isInteger(page) && page >= 1
+        ? units.value.find((u) => u.ordinal === page)
+        : undefined;
+    setActive(target ?? units.value[0]);
+    if (target) {
+      await nextTick();
+      // Open the target's <details> block and center it.
+      const el = document.getElementById(`unit-${target.id}`);
+      if (el) {
+        el.setAttribute("open", "");
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    }
   } catch (err) {
     error.value = String(err);
   } finally {
@@ -271,6 +286,7 @@ onMounted(() => {
         <div class="space-y-2">
           <details
             v-for="u in units"
+            :id="`unit-${u.id}`"
             :key="u.id"
             class="rounded-lg border p-3 text-sm transition-colors"
             :class="[
