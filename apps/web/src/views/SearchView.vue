@@ -7,7 +7,7 @@ import Input from "@/components/ui/Input.vue";
 import { api } from "@/api/client";
 import { fetchGroups, type GroupNode } from "@/api/library";
 import type { SearchField } from "@/search/engine";
-import { ChevronDown, Library, Search } from "lucide-vue-next";
+import { ChevronDown, Library, Search, X } from "lucide-vue-next";
 import { useSearchIndexStore } from "@/stores/searchIndex";
 
 /**
@@ -51,6 +51,43 @@ const scopeFields: Record<Scope, SearchField[] | undefined> = {
 };
 
 const searchIndex = useSearchIndexStore();
+
+// --- live search: results while typing (search-engine style) ---
+const composing = ref(false); // IME (pinyin etc.) mid-composition
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+const LIVE_DEBOUNCE_MS = 250;
+
+function liveSearch(): void {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    debounceTimer = null;
+    // Only live against the local index; the server fallback stays
+    // submit-only (no request spam before the bundle is ready).
+    if (!searchIndex.ready) return;
+    if (query.value.trim()) void search();
+    else hits.value = [];
+  }, LIVE_DEBOUNCE_MS);
+}
+
+watch(query, () => {
+  if (composing.value) return;
+  liveSearch();
+});
+
+function onCompositionStart(): void {
+  composing.value = true;
+}
+
+function onCompositionEnd(): void {
+  composing.value = false;
+  liveSearch();
+}
+
+function clearQuery(): void {
+  query.value = "";
+  hits.value = [];
+  searched.value = false;
+}
 
 /** Render shape: engine hit + synthesized snippet parts. */
 interface DisplayHit {
@@ -175,6 +212,10 @@ function doServerSearchSync(hits: ServerHit[]): DisplayHit[] {
 }
 
 async function search() {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
   const q = query.value.trim();
   if (!q) {
     hits.value = [];
@@ -307,7 +348,20 @@ onMounted(() => {
           v-model="query"
           placeholder="Search pages, slides, transcripts…"
           class="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
+          autocomplete="off"
+          spellcheck="false"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd"
         />
+        <button
+          v-if="query"
+          class="shrink-0 rounded-full p-1 text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+          aria-label="Clear search"
+          type="button"
+          @click="clearQuery"
+        >
+          <X class="h-3.5 w-3.5" />
+        </button>
         <Button type="submit" size="sm" :disabled="busy">Search</Button>
       </form>
     </div>
