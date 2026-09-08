@@ -7,7 +7,7 @@ import { ulid } from "ulid";
 import { AppDataSource } from "../db/data-source";
 import { Asset, ContentUnit, Group, Job } from "../db/entities";
 import { ftsDeleteAsset } from "../search/fts";
-import { logRemoved, unitIdsOfAsset } from "../indexbundle";
+import { logRemoved, logUpserted, unitIdsOfAsset } from "../indexbundle";
 import { serializedTx } from "../db/tx";
 import { publish } from "../bus";
 
@@ -195,6 +195,11 @@ export function registerLibraryRoutes(app: FastifyInstance) {
         if (!group) return reply.code(404).send({ error: "group not found" });
       }
       await repo.update({ id: asset.id }, { groupId: groupId ?? null });
+      // The search bundle carries groupId — re-log the asset's units so
+      // deltas propagate the move to browsers.
+      const unitIds = await unitIdsOfAsset(asset.id);
+      await logUpserted(unitIds);
+      publish({ event: "index.changed" });
       return { ok: true };
     },
   );

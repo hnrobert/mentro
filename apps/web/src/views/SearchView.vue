@@ -5,6 +5,7 @@ import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
 import Input from "@/components/ui/Input.vue";
 import { api } from "@/api/client";
+import { fetchGroups, type GroupNode } from "@/api/library";
 import { useSearchIndexStore } from "@/stores/searchIndex";
 
 /**
@@ -46,6 +47,7 @@ interface DisplayHit {
   fileName: string;
   assetPath: string;
   kind: string;
+  groupId: string | null;
   parts: SnippetPart[];
 }
 
@@ -125,6 +127,7 @@ interface ServerHit {
   fileName: string;
   assetPath: string;
   kind: string;
+  groupId?: string | null;
 }
 
 function doLocalSearch(q: string): DisplayHit[] {
@@ -140,6 +143,7 @@ function doLocalSearch(q: string): DisplayHit[] {
       fileName: u.fileName,
       assetPath: u.sourcePath,
       kind: u.kind,
+      groupId: u.groupId ?? null,
       parts: buildSnippet(u.text ?? "", hit.terms, u.title, u.fileName),
     };
   });
@@ -148,6 +152,7 @@ function doLocalSearch(q: string): DisplayHit[] {
 function doServerSearchSync(hits: ServerHit[]): DisplayHit[] {
   return hits.map((h) => ({
     ...h,
+    groupId: h.groupId ?? null,
     parts: parseSnippet(h.snippet),
   }));
 }
@@ -179,11 +184,59 @@ async function search() {
   }
 }
 
-const filteredHits = computed(() =>
-  kindFilter.value
-    ? hits.value.filter((h) => h.kind === kindFilter.value)
-    : hits.value,
-);
+// --- group filter (multi-select over the knowledge-base tree) ---
+
+const UNGROUPED = "__ungrouped__";
+const groups = ref<GroupNode[]>([]);
+const ungroupedCount = ref(0);
+const groupPanelOpen = ref(false);
+const selectedGroups = ref(new Set<string>());
+
+async function loadGroups(): Promise<void> {
+  try {
+    const tree = await fetchGroups();
+    groups.value = tree.groups;
+    ungroupedCount.value = tree.ungrouped;
+  } catch {
+    groups.value = [];
+  }
+}
+void loadGroups();
+
+function flattenGroups(
+  nodes: GroupNode[],
+  depth = 0,
+): Array<GroupNode & { depth: number }> {
+  return nodes.flatMap((n) => [
+    { ...n, depth },
+    ...flattenGroups(n.children ?? [], depth + 1),
+  ]);
+}
+
+function toggleGroup(id: string): void {
+  const next = new Set(selectedGroups.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  selectedGroups.value = next;
+}
+
+function clearGroups(): void {
+  selectedGroups.value = new Set();
+}
+
+const groupFilterActive = computed(() => selectedGroups.value.size > 0);
+
+const filteredHits = computed(() => {
+  let out = hits.value;
+  if (kindFilter.value) out = out.filter((h) => h.kind === kindFilter.value);
+  if (groupFilterActive.value) {
+    const sel = selectedGroups.value;
+    out = out.filter((h) =>
+      h.groupId ? sel.has(h.groupId) : sel.has(UNGROUPED),
+    );
+  }
+  return out;
+});
 
 /** Per-kind hit counts for the chips (computed pre-filter). */
 const kindCounts = computed(() => {
@@ -258,6 +311,69 @@ onMounted(() => {
       </button>
     </div>
 
+    <!-- Group filter (multi-select over the knowledge-base tree) -->
+    <div v-if="searched && hits.length > 0" class="mb-4">
+      <button
+        class="mx-auto flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent"
+        @click="groupPanelOpen = !groupPanelOpen"
+      >
+        Groups
+        <span
+          v-if="groupFilterActive"
+          class="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground"
+        >
+          {{ selectedGroups.size }}
+        </span>
+        <span
+          class="transition-transform"
+          :class="groupPanelOpen ? 'rotate-90' : ''"
+          >›</span
+        >
+      </button>
+      <div v-if="groupPanelOpen" class="mt-2 rounded-lg border bg-muted/20 p-3">
+        <div
+          class="grid max-h-56 grid-cols-1 gap-1 overflow-y-auto sm:grid-cols-2"
+        >
+          <label
+            v-for="g in flattenGroups(groups)"
+            :key="g.id"
+            class="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-accent/50"
+            :style="{ paddingLeft: `${g.depth * 14 + 6}px` }"
+          >
+            <input
+              type="checkbox"
+              :checked="selectedGroups.has(g.id)"
+              @change="toggleGroup(g.id)"
+            />
+            <span class="truncate">{{ g.name }}</span>
+            <span class="ml-auto text-[11px] text-muted-foreground">{{
+              g.fileCount
+            }}</span>
+          </label>
+          <label
+            class="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent/50"
+          >
+            <input
+              type="checkbox"
+              :checked="selectedGroups.has(UNGROUPED)"
+              @change="toggleGroup(UNGROUPED)"
+            />
+            <span class="italic">Ungrouped</span>
+            <span class="ml-auto text-[11px]">{{ ungroupedCount }}</span>
+          </label>
+        </div>
+        <div class="mt-2 flex justify-end">
+          <button
+            class="text-[11px] text-muted-foreground hover:underline"
+            :disabled="!groupFilterActive"
+            @click="clearGroups"
+          >
+            clear
+          </button>
+        </div>
+      </div>
+    </div>
+
     <p v-if="error" class="text-center text-sm text-destructive">
       {{ error }}
     </p>
@@ -271,8 +387,7 @@ onMounted(() => {
       v-else-if="searched && filteredHits.length === 0"
       class="text-center text-sm text-muted-foreground"
     >
-      No {{ KIND_FILTERS.find((f) => f.value === kindFilter)?.label }} results —
-      pick another filter.
+      No matching results — adjust the kind or group filters.
     </p>
 
     <div class="space-y-2">

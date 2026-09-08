@@ -152,6 +152,7 @@ export class MiniSearchEngine implements SearchEngine {
         sourcePath: "",
         mtimeMs: 0,
         hasThumb: false,
+        groupId: null,
       };
       const unit: SearchUnit = doc.unit ?? this.unitsById.get(r.id) ?? fallback;
       return {

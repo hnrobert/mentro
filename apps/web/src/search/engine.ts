@@ -12,6 +12,8 @@ export interface SearchUnit {
   sourcePath: string;
   mtimeMs: number;
   hasThumb: boolean;
+  /** Owning asset's group (null = ungrouped); powers group filters. */
+  groupId: string | null;
 }
 
 export interface SearchHit {

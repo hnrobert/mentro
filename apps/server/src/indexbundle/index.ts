@@ -19,6 +19,8 @@ export interface BundleUnit {
   sourcePath: string;
   mtimeMs: number;
   hasThumb: boolean;
+  /** Owning asset's knowledge-base group (search filters by group). */
+  groupId: string | null;
 }
 
 export interface FullBundle {
@@ -35,7 +37,7 @@ export interface DeltaBundle {
 
 const UNIT_SELECT = `
   SELECT cu.id, cu.asset_id, cu.ordinal, cu.unit_type, cu.title, cu.text,
-         cu.thumb_path, a.path AS asset_path, a.kind, a.mtime_ms
+         cu.thumb_path, a.path AS asset_path, a.kind, a.mtime_ms, a.group_id
   FROM content_units cu JOIN assets a ON a.id = cu.asset_id`;
 
 /** Current changelog version (0 when nothing logged yet). */
@@ -96,6 +98,7 @@ function rowToUnit(r: Record<string, unknown>): BundleUnit {
     sourcePath: path,
     mtimeMs: r.mtime_ms as number,
     hasThumb: Boolean(r.thumb_path),
+    groupId: (r.group_id as string | null) ?? null,
   };
 }
 
