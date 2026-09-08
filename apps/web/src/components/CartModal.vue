@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import Button from "@/components/ui/Button.vue";
 import { api, apiBlobProgress } from "@/api/client";
 import { useCartStore } from "@/stores/cart";
+import { X } from "lucide-vue-next";
 
 /**
  * Cart drawer: review selected pages grouped by file, then export in one
@@ -168,10 +169,11 @@ async function download(mode: "native" | "original"): Promise<void> {
           </span>
         </h2>
         <button
-          class="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-accent"
+          class="rounded p-1 text-muted-foreground hover:bg-accent"
+          aria-label="Close"
           @click="emit('close')"
         >
-          ✕
+          <X class="h-4 w-4" />
         </button>
       </div>
 
@@ -206,9 +208,10 @@ async function download(mode: "native" | "original"): Promise<void> {
               {{ item.unitType }} {{ item.ordinal }}
               <button
                 class="text-muted-foreground hover:text-destructive"
+                :aria-label="`Remove ${item.unitType} ${item.ordinal}`"
                 @click="cart.remove(item.unitId)"
               >
-                ✕
+                <X class="h-3 w-3" />
               </button>
             </span>
           </div>

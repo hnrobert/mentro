@@ -13,6 +13,7 @@
   "dependencies": {
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "lucide-vue-next": "^1.0.0",
     "minisearch": "^7.2.0",
     "pdfjs-dist": "^6.2.108",
     "pinia": "^3.0.0",

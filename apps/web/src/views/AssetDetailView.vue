@@ -5,6 +5,7 @@ import Button from "@/components/ui/Button.vue";
 import { api, apiBlob } from "@/api/client";
 import { moveAsset, fetchGroups, type GroupNode } from "@/api/library";
 import PdfPreview from "@/components/PdfPreview.vue";
+import { ChevronRight } from "lucide-vue-next";
 import { useCartStore } from "@/stores/cart";
 
 const route = useRoute();
@@ -119,13 +120,20 @@ function setActive(u: DetailUnit, opts: { updateRoute?: boolean } = {}): void {
   }
 }
 
-/** Open + scroll a unit into view (deep link / back navigation). */
+/** Open + scroll a unit into view (deep link / back navigation) and
+ *  flash it so the landing spot is obvious. Double-RAF waits for the
+ *  list to lay out before scrolling. */
 async function revealUnit(u: DetailUnit): Promise<void> {
   await nextTick();
+  await new Promise((r) =>
+    requestAnimationFrame(() => requestAnimationFrame(r)),
+  );
   const el = document.getElementById(`unit-${u.id}`);
   if (el) {
     el.setAttribute("open", "");
     el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.add("unit-landed");
+    setTimeout(() => el.classList.remove("unit-landed"), 2000);
   }
 }
 
@@ -325,16 +333,24 @@ onMounted(() => {
             ]"
             @toggle="($event.target as HTMLDetailsElement).open && setActive(u)"
           >
-            <summary class="cursor-pointer select-none font-medium">
+            <summary
+              class="flex cursor-pointer select-none list-none items-center gap-2 font-medium [&::-webkit-details-marker]:hidden"
+            >
+              <ChevronRight
+                class="unit-chevron h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200"
+              />
               <input
                 v-if="selectable(u)"
                 type="checkbox"
-                class="mr-2 align-middle"
+                class="h-4 w-4 shrink-0 accent-current"
                 :checked="cart.has(u.id)"
                 @click.stop="toggleCart(u)"
               />
-              {{ u.unitType }} {{ u.ordinal }}
-              <span v-if="u.title" class="ml-2 text-muted-foreground">
+              <span class="shrink-0">{{ u.unitType }} {{ u.ordinal }}</span>
+              <span
+                v-if="u.title"
+                class="min-w-0 truncate font-normal text-muted-foreground"
+              >
                 {{ u.title.slice(0, 60) }}
               </span>
             </summary>
@@ -344,6 +360,17 @@ onMounted(() => {
           </details>
         </div>
       </template>
+
+      <style scoped>
+        details[open] > summary .unit-chevron {
+          transform: rotate(90deg);
+        }
+        .unit-landed {
+          outline: 2px solid hsl(var(--primary, 0 0% 9%) / 0.6);
+          outline-offset: 2px;
+          transition: outline-color 1.5s ease;
+        }
+      </style>
     </div>
 
     <!-- Right: sticky page preview pane (fixed height — loading an image
@@ -405,3 +432,14 @@ onMounted(() => {
     />
   </div>
 </template>
+
+<style scoped>
+details[open] > summary .unit-chevron {
+  transform: rotate(90deg);
+}
+.unit-landed {
+  outline: 2px solid hsl(var(--primary, 0 0% 9%) / 0.6);
+  outline-offset: 2px;
+  transition: outline-color 1.5s ease;
+}
+</style>

@@ -98,6 +98,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      lucide-vue-next:
+        specifier: ^1.0.0
+        version: 1.0.0(vue@3.5.41(typescript@5.9.3))
       minisearch:
         specifier: ^7.2.0
         version: 7.2.0
@@ -3459,6 +3462,15 @@ packages:
       }
     engines: { node: 20 || >=22 }
 
+  lucide-vue-next@1.0.0:
+    resolution:
+      {
+        integrity: sha512-V6SPvx1IHTj/UY+FrIYWV5faISsPSb8BnWSFDxAtezWKvWc9ZZ40PDrdu1/Qb5vg4lHWr1hs1BAMGVGm6V1Xdg==,
+      }
+    deprecated: Package deprecated. Please use @lucide/vue instead.
+    peerDependencies:
+      vue: ">=3.0.1"
+
   magic-string@0.30.21:
     resolution:
       {
@@ -6440,6 +6452,10 @@ snapshots:
   loupe@3.2.1: {}
 
   lru-cache@11.5.2: {}
+
+  lucide-vue-next@1.0.0(vue@3.5.41(typescript@5.9.3)):
+    dependencies:
+      vue: 3.5.41(typescript@5.9.3)
 
   magic-string@0.30.21:
     dependencies:

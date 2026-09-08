@@ -6,6 +6,7 @@ import Card from "@/components/ui/Card.vue";
 import Input from "@/components/ui/Input.vue";
 import { api } from "@/api/client";
 import { fetchGroups, type GroupNode } from "@/api/library";
+import { ChevronDown } from "lucide-vue-next";
 import { useSearchIndexStore } from "@/stores/searchIndex";
 
 /**
@@ -324,11 +325,10 @@ onMounted(() => {
         >
           {{ selectedGroups.size }}
         </span>
-        <span
-          class="transition-transform"
-          :class="groupPanelOpen ? 'rotate-90' : ''"
-          >›</span
-        >
+        <ChevronDown
+          class="h-3.5 w-3.5 transition-transform"
+          :class="groupPanelOpen ? '' : '-rotate-90'"
+        />
       </button>
       <div v-if="groupPanelOpen" class="mt-2 rounded-lg border bg-muted/20 p-3">
         <div

@@ -6,6 +6,7 @@ import { useCartStore } from "@/stores/cart";
 import { api } from "@/api/client";
 import UploadModal from "@/components/UploadModal.vue";
 import CartModal from "@/components/CartModal.vue";
+import { ShoppingCart } from "lucide-vue-next";
 
 const auth = useAuthStore();
 const cart = useCartStore();
@@ -100,7 +101,7 @@ onMounted(() => {
             title="Selected pages"
             @click="cartOpen = true"
           >
-            🛒
+            <ShoppingCart class="h-4 w-4" />
             <span
               v-if="cart.count > 0"
               class="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold text-primary-foreground"
