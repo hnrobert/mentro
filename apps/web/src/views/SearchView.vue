@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
 import Input from "@/components/ui/Input.vue";
 import { api } from "@/api/client";
 import { fetchGroups, type GroupNode } from "@/api/library";
-import { ChevronDown, Library } from "lucide-vue-next";
+import type { SearchField } from "@/search/engine";
+import { ChevronDown, Library, Search } from "lucide-vue-next";
 import { useSearchIndexStore } from "@/stores/searchIndex";
 
 /**
@@ -35,8 +36,19 @@ const searched = ref(false);
 const busy = ref(false);
 const error = ref("");
 const kindFilter = ref<string>("");
-/** "everywhere" = text+title+fileName; "filename" = fileName only. */
-const scope = ref<"everywhere" | "filename">("everywhere");
+/** Query scope: body content only / content + filenames / filenames only. */
+type Scope = "content" | "everywhere" | "filename";
+const scope = ref<Scope>("everywhere");
+const SCOPES: Array<{ value: Scope; label: string }> = [
+  { value: "content", label: "Content" },
+  { value: "everywhere", label: "Content + filenames" },
+  { value: "filename", label: "Filenames" },
+];
+const scopeFields: Record<Scope, SearchField[] | undefined> = {
+  content: ["text", "title"],
+  everywhere: undefined,
+  filename: ["fileName"],
+};
 
 const searchIndex = useSearchIndexStore();
 
@@ -134,10 +146,8 @@ interface ServerHit {
 }
 
 function doLocalSearch(q: string): DisplayHit[] {
-  const fields =
-    scope.value === "filename" ? (["fileName"] as const) : undefined;
   const results = searchIndex.engine.search(q, 50, {
-    fields: [...(fields ?? [])],
+    fields: scopeFields[scope.value],
   });
   return results.map((hit) => {
     const u = hit.unit;
@@ -266,6 +276,11 @@ function openHit(hit: DisplayHit): void {
   });
 }
 
+// Scope is part of the query — switching it re-runs the search.
+watch(scope, () => {
+  if (query.value.trim()) void search();
+});
+
 onMounted(() => {
   void searchIndex.init();
 });
@@ -273,47 +288,50 @@ onMounted(() => {
 
 <template>
   <div class="mx-auto flex min-h-[70vh] max-w-2xl flex-col px-4">
-    <!-- Centered hero search -->
-    <div class="mb-4 mt-[10vh] text-center">
-      <h1 class="mb-5 text-2xl font-semibold tracking-tight">Mentro</h1>
-      <form class="mx-auto flex max-w-xl gap-2" @submit.prevent="search">
-        <Input
+    <!-- Hero: quiet title, protagonist input -->
+    <div class="mb-5 mt-[9vh] text-center">
+      <p
+        class="mb-4 text-[11px] font-medium uppercase tracking-[0.22em] text-muted-foreground"
+      >
+        Knowledge Base
+      </p>
+      <form
+        class="mx-auto flex max-w-xl items-center gap-2 rounded-xl border bg-background p-1.5 pl-4 shadow-sm transition-shadow focus-within:shadow-md focus-within:ring-1 focus-within:ring-ring"
+        @submit.prevent="search"
+      >
+        <Search
+          class="h-4 w-4 shrink-0 text-muted-foreground"
+          aria-hidden="true"
+        />
+        <input
           v-model="query"
           placeholder="Search pages, slides, transcripts…"
-          class="flex-1"
+          class="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
         />
-        <Button type="submit" :disabled="busy">Search</Button>
+        <Button type="submit" size="sm" :disabled="busy">Search</Button>
       </form>
     </div>
     <!-- Filters: available BEFORE searching (scope + type + groups) -->
     <div class="mb-6 flex flex-col items-center gap-3">
-      <!-- Scope: content+filename vs filename only -->
+      <!-- Scope: content / content+filenames / filenames -->
       <div
-        class="inline-flex overflow-hidden rounded-full border text-xs"
+        class="inline-flex overflow-hidden rounded-full border bg-background text-xs"
         role="group"
         aria-label="Search scope"
       >
         <button
-          class="px-3 py-1 transition-colors"
+          v-for="sc in SCOPES"
+          :key="sc.value"
+          class="px-3 py-1.5 transition-colors first:rounded-l-full last:rounded-r-full"
           :class="
-            scope === 'everywhere'
+            scope === sc.value
               ? 'bg-primary text-primary-foreground'
               : 'text-muted-foreground hover:bg-accent'
           "
-          @click="scope = 'everywhere'"
+          :aria-pressed="scope === sc.value"
+          @click="scope = sc.value"
         >
-          Content + filenames
-        </button>
-        <button
-          class="border-l px-3 py-1 transition-colors"
-          :class="
-            scope === 'filename'
-              ? 'bg-primary text-primary-foreground'
-              : 'text-muted-foreground hover:bg-accent'
-          "
-          @click="scope = 'filename'"
-        >
-          Filenames only
+          {{ sc.label }}
         </button>
       </div>
 
@@ -322,11 +340,11 @@ onMounted(() => {
         <button
           v-for="f in KIND_FILTERS"
           :key="f.value"
-          class="rounded-full border px-3 py-1 text-xs transition-colors"
+          class="rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors"
           :class="
             kindFilter === f.value
               ? 'border-primary bg-primary text-primary-foreground'
-              : 'text-muted-foreground hover:bg-accent'
+              : 'border-transparent bg-muted/60 text-muted-foreground hover:bg-muted'
           "
           :disabled="f.value !== '' && searched && !kindCounts.has(f.value)"
           @click="kindFilter = f.value"
@@ -424,11 +442,33 @@ onMounted(() => {
       No matching results — adjust the kind or group filters.
     </p>
 
-    <div class="space-y-2">
+    <!-- Results -->
+    <div
+      v-if="searched && filteredHits.length > 0"
+      class="mb-3 mt-2 flex items-baseline justify-between border-t pt-3"
+    >
+      <span class="text-xs font-medium tracking-wide text-muted-foreground">
+        {{ filteredHits.length }}
+        {{ filteredHits.length === 1 ? "result" : "results" }}
+      </span>
+      <span
+        v-if="kindFilter || groupFilterActive || scope !== 'everywhere'"
+        class="text-[11px] text-muted-foreground/70"
+      >
+        {{ SCOPES.find((sc) => sc.value === scope)?.label
+        }}{{
+          kindFilter
+            ? " · " + KIND_FILTERS.find((f) => f.value === kindFilter)?.label
+            : ""
+        }}{{ groupFilterActive ? " · " + selectedGroups.size + " groups" : "" }}
+      </span>
+    </div>
+
+    <div class="space-y-1.5">
       <Card
         v-for="hit in filteredHits"
         :key="hit.unitId"
-        class="cursor-pointer p-3 hover:bg-accent/40"
+        class="cursor-pointer p-3.5 transition-all duration-150 hover:-translate-y-px hover:bg-accent/40 hover:shadow-sm"
         @click="openHit(hit)"
       >
         <div class="mb-1 flex items-baseline justify-between gap-2">
