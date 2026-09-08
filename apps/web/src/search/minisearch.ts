@@ -11,6 +11,7 @@
 
 import MiniSearch, { type SearchResult } from "minisearch";
 import type { SearchEngine, SearchHit, SearchUnit } from "./engine";
+import type { SearchOptions } from "./engine";
 
 interface IndexedUnit {
   id: string;
@@ -134,10 +135,12 @@ export class MiniSearchEngine implements SearchEngine {
     this.index.addAll(docs);
   }
 
-  search(query: string, limit = 50): SearchHit[] {
+  search(query: string, limit = 50, opts?: SearchOptions): SearchHit[] {
     const trimmed = query.trim();
     if (!trimmed) return [];
-    const results: SearchResult[] = this.index.search(trimmed);
+    const results: SearchResult[] = this.index.search(trimmed, {
+      ...(opts?.fields ? { fields: opts.fields } : {}),
+    });
     return results.slice(0, limit).map((r) => {
       const doc = r as SearchResult & { unit?: SearchUnit };
       const fallback: SearchUnit = {

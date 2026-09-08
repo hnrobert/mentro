@@ -6,7 +6,7 @@ import Card from "@/components/ui/Card.vue";
 import Input from "@/components/ui/Input.vue";
 import { api } from "@/api/client";
 import { fetchGroups, type GroupNode } from "@/api/library";
-import { ChevronDown } from "lucide-vue-next";
+import { ChevronDown, Library } from "lucide-vue-next";
 import { useSearchIndexStore } from "@/stores/searchIndex";
 
 /**
@@ -35,6 +35,8 @@ const searched = ref(false);
 const busy = ref(false);
 const error = ref("");
 const kindFilter = ref<string>("");
+/** "everywhere" = text+title+fileName; "filename" = fileName only. */
+const scope = ref<"everywhere" | "filename">("everywhere");
 
 const searchIndex = useSearchIndexStore();
 
@@ -132,7 +134,11 @@ interface ServerHit {
 }
 
 function doLocalSearch(q: string): DisplayHit[] {
-  const results = searchIndex.engine.search(q);
+  const fields =
+    scope.value === "filename" ? (["fileName"] as const) : undefined;
+  const results = searchIndex.engine.search(q, 50, {
+    fields: [...(fields ?? [])],
+  });
   return results.map((hit) => {
     const u = hit.unit;
     return {
@@ -268,7 +274,7 @@ onMounted(() => {
 <template>
   <div class="mx-auto flex min-h-[70vh] max-w-2xl flex-col px-4">
     <!-- Centered hero search -->
-    <div class="mb-6 mt-[16vh] text-center">
+    <div class="mb-4 mt-[10vh] text-center">
       <h1 class="mb-5 text-2xl font-semibold tracking-tight">Mentro</h1>
       <form class="mx-auto flex max-w-xl gap-2" @submit.prevent="search">
         <Input
@@ -279,97 +285,125 @@ onMounted(() => {
         <Button type="submit" :disabled="busy">Search</Button>
       </form>
     </div>
-
-    <!-- Kind filter chips -->
-    <div
-      v-if="searched && hits.length > 0"
-      class="mb-4 flex flex-wrap justify-center gap-1.5"
-    >
-      <button
-        v-for="f in KIND_FILTERS"
-        :key="f.value"
-        class="rounded-full border px-3 py-1 text-xs transition-colors"
-        :class="
-          kindFilter === f.value
-            ? 'border-primary bg-primary text-primary-foreground'
-            : 'text-muted-foreground hover:bg-accent'
-        "
-        :disabled="f.value !== '' && !kindCounts.has(f.value)"
-        :title="
-          f.value === ''
-            ? 'all results'
-            : `${kindCounts.get(f.value) ?? 0} hits`
-        "
-        @click="kindFilter = f.value"
+    <!-- Filters: available BEFORE searching (scope + type + groups) -->
+    <div class="mb-6 flex flex-col items-center gap-3">
+      <!-- Scope: content+filename vs filename only -->
+      <div
+        class="inline-flex overflow-hidden rounded-full border text-xs"
+        role="group"
+        aria-label="Search scope"
       >
-        {{ f.label }}
-        <span
-          v-if="f.value !== '' && kindCounts.has(f.value)"
-          class="ml-1 opacity-70"
+        <button
+          class="px-3 py-1 transition-colors"
+          :class="
+            scope === 'everywhere'
+              ? 'bg-primary text-primary-foreground'
+              : 'text-muted-foreground hover:bg-accent'
+          "
+          @click="scope = 'everywhere'"
         >
-          {{ kindCounts.get(f.value) }}
-        </span>
-      </button>
-    </div>
+          Content + filenames
+        </button>
+        <button
+          class="border-l px-3 py-1 transition-colors"
+          :class="
+            scope === 'filename'
+              ? 'bg-primary text-primary-foreground'
+              : 'text-muted-foreground hover:bg-accent'
+          "
+          @click="scope = 'filename'"
+        >
+          Filenames only
+        </button>
+      </div>
 
-    <!-- Group filter (multi-select over the knowledge-base tree) -->
-    <div v-if="searched && hits.length > 0" class="mb-4">
-      <button
-        class="mx-auto flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent"
-        @click="groupPanelOpen = !groupPanelOpen"
-      >
-        Groups
-        <span
-          v-if="groupFilterActive"
-          class="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground"
+      <!-- Kind chips (counts appear after a search) -->
+      <div class="flex flex-wrap justify-center gap-1.5">
+        <button
+          v-for="f in KIND_FILTERS"
+          :key="f.value"
+          class="rounded-full border px-3 py-1 text-xs transition-colors"
+          :class="
+            kindFilter === f.value
+              ? 'border-primary bg-primary text-primary-foreground'
+              : 'text-muted-foreground hover:bg-accent'
+          "
+          :disabled="f.value !== '' && searched && !kindCounts.has(f.value)"
+          @click="kindFilter = f.value"
         >
-          {{ selectedGroups.size }}
-        </span>
-        <ChevronDown
-          class="h-3.5 w-3.5 transition-transform"
-          :class="groupPanelOpen ? '' : '-rotate-90'"
-        />
-      </button>
-      <div v-if="groupPanelOpen" class="mt-2 rounded-lg border bg-muted/20 p-3">
+          {{ f.label }}
+          <span
+            v-if="f.value !== '' && kindCounts.has(f.value)"
+            class="ml-1 opacity-70"
+          >
+            {{ kindCounts.get(f.value) }}
+          </span>
+        </button>
+      </div>
+
+      <!-- Groups entry -->
+      <div class="w-full">
+        <button
+          class="mx-auto flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent"
+          @click="groupPanelOpen = !groupPanelOpen"
+        >
+          <Library class="h-3.5 w-3.5" />
+          Groups
+          <span
+            v-if="groupFilterActive"
+            class="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground"
+          >
+            {{ selectedGroups.size }}
+          </span>
+          <ChevronDown
+            class="h-3.5 w-3.5 transition-transform"
+            :class="groupPanelOpen ? '' : '-rotate-90'"
+          />
+        </button>
         <div
-          class="grid max-h-56 grid-cols-1 gap-1 overflow-y-auto sm:grid-cols-2"
+          v-if="groupPanelOpen"
+          class="mt-2 rounded-lg border bg-muted/20 p-3"
         >
-          <label
-            v-for="g in flattenGroups(groups)"
-            :key="g.id"
-            class="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-accent/50"
-            :style="{ paddingLeft: `${g.depth * 14 + 6}px` }"
+          <div
+            class="grid max-h-56 grid-cols-1 gap-1 overflow-y-auto sm:grid-cols-2"
           >
-            <input
-              type="checkbox"
-              :checked="selectedGroups.has(g.id)"
-              @change="toggleGroup(g.id)"
-            />
-            <span class="truncate">{{ g.name }}</span>
-            <span class="ml-auto text-[11px] text-muted-foreground">{{
-              g.fileCount
-            }}</span>
-          </label>
-          <label
-            class="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent/50"
-          >
-            <input
-              type="checkbox"
-              :checked="selectedGroups.has(UNGROUPED)"
-              @change="toggleGroup(UNGROUPED)"
-            />
-            <span class="italic">Ungrouped</span>
-            <span class="ml-auto text-[11px]">{{ ungroupedCount }}</span>
-          </label>
-        </div>
-        <div class="mt-2 flex justify-end">
-          <button
-            class="text-[11px] text-muted-foreground hover:underline"
-            :disabled="!groupFilterActive"
-            @click="clearGroups"
-          >
-            clear
-          </button>
+            <label
+              v-for="g in flattenGroups(groups)"
+              :key="g.id"
+              class="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-accent/50"
+              :style="{ paddingLeft: `${g.depth * 14 + 6}px` }"
+            >
+              <input
+                type="checkbox"
+                :checked="selectedGroups.has(g.id)"
+                @change="toggleGroup(g.id)"
+              />
+              <span class="truncate">{{ g.name }}</span>
+              <span class="ml-auto text-[11px] text-muted-foreground">{{
+                g.fileCount
+              }}</span>
+            </label>
+            <label
+              class="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent/50"
+            >
+              <input
+                type="checkbox"
+                :checked="selectedGroups.has(UNGROUPED)"
+                @change="toggleGroup(UNGROUPED)"
+              />
+              <span class="italic">Ungrouped</span>
+              <span class="ml-auto text-[11px]">{{ ungroupedCount }}</span>
+            </label>
+          </div>
+          <div class="mt-2 flex justify-end">
+            <button
+              class="text-[11px] text-muted-foreground hover:underline"
+              :disabled="!groupFilterActive"
+              @click="clearGroups"
+            >
+              clear
+            </button>
+          </div>
         </div>
       </div>
     </div>

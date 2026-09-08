@@ -23,9 +23,17 @@ export interface SearchHit {
   terms: string[];
 }
 
+/** Fields a search may target — the UI's "filename only" scope. */
+export type SearchField = "title" | "fileName" | "text";
+
+export interface SearchOptions {
+  /** Restrict matching to these fields (default: all). */
+  fields?: SearchField[];
+}
+
 export interface SearchEngine {
   readonly size: number;
   replaceAll(units: SearchUnit[]): void;
   applyDelta(upserted: SearchUnit[], removed: string[]): void;
-  search(query: string, limit?: number): SearchHit[];
+  search(query: string, limit?: number, opts?: SearchOptions): SearchHit[];
 }
