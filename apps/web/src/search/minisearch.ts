@@ -157,7 +157,12 @@ export class MiniSearchEngine implements SearchEngine {
       return {
         unit,
         score: r.score,
-        terms: Object.keys(r.terms ?? {}),
+        // r.terms is a plain string[] — Object.keys() here used to turn
+        // it into index strings ("0","1"), sending snippet highlighting
+        // off to find digits instead of the actual keywords.
+        terms: (Array.isArray(r.terms)
+          ? r.terms
+          : Object.keys(r.terms ?? {})) as string[],
       };
     });
   }

@@ -54,31 +54,47 @@ interface SnippetPart {
   hit: boolean;
 }
 
-/** Synthesize a snippet around the first term occurrence in the text. */
-function buildSnippet(text: string, terms: string[]): SnippetPart[] {
-  if (!text) return [];
-  const norm = text.toLowerCase();
-  let idx = -1;
-  let len = 0;
-  for (const t of terms) {
-    const i = norm.indexOf(t.toLowerCase());
-    if (i >= 0 && (idx < 0 || i < idx)) {
-      idx = i;
-      len = t.length;
+/** Synthesize a snippet around the first term occurrence. Prefers the
+ *  body text; falls back to the title / file name so a hit that matched
+ *  there still highlights where it actually matched. */
+function buildSnippet(
+  text: string,
+  terms: string[],
+  title?: string | null,
+  fileName?: string,
+): SnippetPart[] {
+  const sources = [
+    { body: text, label: "" },
+    { body: title ?? "", label: "title · " },
+    { body: fileName ?? "", label: "file · " },
+  ];
+  for (const src of sources) {
+    if (!src.body) continue;
+    const norm = src.body.toLowerCase();
+    let idx = -1;
+    let len = 0;
+    for (const t of terms) {
+      const i = norm.indexOf(t.toLowerCase());
+      if (i >= 0 && (idx < 0 || i < idx)) {
+        idx = i;
+        len = t.length;
+      }
+    }
+    if (idx >= 0) {
+      const start = Math.max(0, idx - 40);
+      const end = Math.min(src.body.length, idx + len + 80);
+      const parts: SnippetPart[] = [];
+      if (src.label) parts.push({ text: src.label, hit: false });
+      if (start > 0) parts.push({ text: "…", hit: false });
+      parts.push({ text: src.body.slice(start, idx), hit: false });
+      parts.push({ text: src.body.slice(idx, idx + len), hit: true });
+      parts.push({ text: src.body.slice(idx + len, end), hit: false });
+      if (end < src.body.length) parts.push({ text: "…", hit: false });
+      return parts;
     }
   }
-  if (idx < 0) {
-    return [{ text: text.slice(0, 120), hit: false }];
-  }
-  const start = Math.max(0, idx - 40);
-  const end = Math.min(text.length, idx + len + 80);
-  const parts: SnippetPart[] = [];
-  if (start > 0) parts.push({ text: "…", hit: false });
-  parts.push({ text: text.slice(start, idx), hit: false });
-  parts.push({ text: text.slice(idx, idx + len), hit: true });
-  parts.push({ text: text.slice(idx + len, end), hit: false });
-  if (end < text.length) parts.push({ text: "…", hit: false });
-  return parts;
+  if (!text) return [];
+  return [{ text: text.slice(0, 120), hit: false }];
 }
 
 /** Split "[foo] bar [baz]" snippets into highlightable parts. */
@@ -124,7 +140,7 @@ function doLocalSearch(q: string): DisplayHit[] {
       fileName: u.fileName,
       assetPath: u.sourcePath,
       kind: u.kind,
-      parts: buildSnippet(u.text ?? "", hit.terms),
+      parts: buildSnippet(u.text ?? "", hit.terms, u.title, u.fileName),
     };
   });
 }
