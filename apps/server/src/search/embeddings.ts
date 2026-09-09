@@ -10,10 +10,15 @@ import type { WorkerClient } from "../worker/client";
 
 interface Cache {
   byUnit: Map<string, Float32Array>;
+  assetByUnit: Map<string, string>;
   loaded: Promise<void> | null;
 }
 
-const cache: Cache = { byUnit: new Map(), loaded: null };
+const cache: Cache = {
+  byUnit: new Map(),
+  assetByUnit: new Map(),
+  loaded: null,
+};
 
 onIndexChanged(() => {
   cache.byUnit.clear();
@@ -24,10 +29,13 @@ function load(): Promise<void> {
   cache.loaded ??= (async () => {
     const rows = await AppDataSource.getRepository(UnitEmbedding).find();
     const byUnit = new Map<string, Float32Array>();
+    const assets = new Map<string, string>();
     for (const row of rows) {
       byUnit.set(row.unitId, decodeVector(row.vector));
+      assets.set(row.unitId, row.assetId);
     }
     cache.byUnit = byUnit;
+    cache.assetByUnit = assets;
   })();
   return cache.loaded;
 }
@@ -85,14 +93,33 @@ export async function countEmbeddings(): Promise<number> {
   return cache.byUnit.size;
 }
 
-/** Top-`limit` unit ids by cosine similarity. */
+/** Top-`limit` unit ids by cosine similarity. `groups` restricts to
+ *  units whose asset belongs to one of the given group ids
+ *  (`__ungrouped__` = null group). */
 export async function nearestUnits(
   query: Float32Array,
   limit: number,
+  groups?: Set<string>,
 ): Promise<Array<{ unitId: string; score: number }>> {
   await load();
+  let allowed: Set<string> | null = null;
+  if (groups && groups.size > 0) {
+    const ids = [...groups].filter((g) => g !== "__ungrouped__");
+    const wantsUngrouped = groups.has("__ungrouped__");
+    const rows = (await AppDataSource.query(
+      `SELECT id FROM assets WHERE ${[
+        ...(ids.length > 0
+          ? [`group_id IN (${ids.map(() => "?").join(",")})`]
+          : []),
+        ...(wantsUngrouped ? ["group_id IS NULL"] : []),
+      ].join(" OR ")}`,
+      ids,
+    )) as Array<{ id: string }>;
+    allowed = new Set(rows.map((r) => r.id));
+  }
   const scored: Array<{ unitId: string; score: number }> = [];
   for (const [unitId, vec] of cache.byUnit) {
+    if (allowed && !allowed.has(cache.assetByUnit.get(unitId) ?? "")) continue;
     let dot = 0;
     const n = Math.min(vec.length, query.length);
     for (let i = 0; i < n; i++) dot += vec[i] * query[i];

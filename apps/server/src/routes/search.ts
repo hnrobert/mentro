@@ -5,50 +5,36 @@ import { ftsSearch, type SearchHit } from "../search/fts";
 import { embedTexts, nearestUnits } from "../search/embeddings";
 import type { WorkerClient } from "../worker/client";
 
-export interface HybridHit extends SearchHit {
-  score: number;
-  source: "fts" | "semantic" | "hybrid";
+/**
+ * Server-side search: the ONLY search path (the browser-local index was
+ * removed). As-you-type calls /api/search/suggest; Enter runs the full
+ * hybrid search here.
+ *
+ * Query params:
+ * - q         search text
+ * - limit     max hits (default 50)
+ * - mode      fts | semantic | hybrid (default hybrid)
+ * - scope     everywhere | content | filename — FTS5 column filter
+ * - groups    comma-separated group ids (`__ungrouped__` = null group);
+ *             empty/absent = all groups
+ */
+
+type Scope = "everywhere" | "content" | "filename";
+
+function scopedExpr(q: string, scope: Scope): string {
+  const expr = ftsMatchExpr(q);
+  if (scope === "filename") return `{file_name} : ${expr}`;
+  if (scope === "content") return `{title text} : ${expr}`;
+  return expr;
 }
 
-/** Reciprocal Rank Fusion: robust to incomparable score scales (BM25
- *  rank vs cosine), standard k=60. */
-const RRF_K = 60;
-
-async function semanticRanking(
-  worker: WorkerClient,
-  q: string,
-  limit: number,
-): Promise<Array<{ unitId: string; score: number }>> {
-  const [vector] = await embedTexts(worker, [q]);
-  if (!vector) return []; // sidecar unavailable -> FTS-only
-  return nearestUnits(vector, limit);
-}
-
-/** Minimal hit shapes for unit ids the FTS leg never saw. */
-async function hydrateSemantic(unitIds: string[]): Promise<SearchHit[]> {
-  if (unitIds.length === 0) return [];
-  const rows = (await AppDataSource.query(
-    `SELECT cu.id AS unit_id, cu.asset_id, cu.ordinal, cu.unit_type, cu.title,
-            substr(COALESCE(cu.text, ''), 1, 200) AS snip,
-            a.path AS asset_path, a.kind
-     FROM content_units cu JOIN assets a ON a.id = cu.asset_id
-     WHERE cu.id IN (${unitIds.map(() => "?").join(",")})`,
-    unitIds,
-  )) as Array<Record<string, unknown>>;
-  return rows.map((r) => ({
-    unitId: r.unit_id as string,
-    assetId: r.asset_id as string,
-    ordinal: r.ordinal as number,
-    unitType: r.unit_type as string,
-    title: (r.title as string) ?? null,
-    snippet: (r.snip as string) ?? null,
-    fileName:
-      String(r.asset_path ?? "")
-        .split("/")
-        .pop() ?? "",
-    assetPath: r.asset_path as string,
-    kind: r.kind as string,
-  }));
+/** Last token becomes a prefix term — friendly to partial input. */
+function prefixExpr(q: string): string {
+  const expr = ftsMatchExpr(q);
+  const tokens = expr.split(" ").filter(Boolean);
+  if (tokens.length === 0) return "";
+  tokens[tokens.length - 1] = `${tokens[tokens.length - 1]}*`;
+  return tokens.join(" ");
 }
 
 export async function hybridSearch(
@@ -56,12 +42,19 @@ export async function hybridSearch(
   q: string,
   limit: number,
   mode: "fts" | "semantic" | "hybrid" = "hybrid",
-): Promise<HybridHit[]> {
+  opts: { scope?: Scope; groups?: Set<string> } = {},
+): Promise<SearchHit[]> {
   const [ftsHits, semantic] = await Promise.all([
     mode === "semantic"
       ? Promise.resolve([])
-      : ftsSearch(ftsMatchExpr(q), limit),
-    mode === "fts" ? Promise.resolve([]) : semanticRanking(worker, q, limit),
+      : ftsSearch(
+          scopedExpr(q, opts.scope ?? "everywhere"),
+          limit,
+          opts.groups,
+        ),
+    mode === "fts"
+      ? Promise.resolve([])
+      : semanticRanking(worker, q, limit, opts.groups),
   ]);
 
   const merged = new Map<
@@ -71,19 +64,21 @@ export async function hybridSearch(
   ftsHits.forEach((hit, rank) => {
     merged.set(hit.unitId, {
       hit,
-      score: 1 / (RRF_K + 1 + rank),
+      score: 1 / (60 + 1 + rank),
       viaFts: true,
       viaSem: false,
     });
   });
 
-  // Semantic-only units need hydrated hit shapes.
   const semOnly = semantic.filter((s) => !merged.has(s.unitId));
-  const hydrated = await hydrateSemantic(semOnly.map((s) => s.unitId));
+  const hydrated = await hydrateSemantic(
+    semOnly.map((s) => s.unitId),
+    opts.groups,
+  );
   const hydratedById = new Map(hydrated.map((h) => [h.unitId, h]));
 
   semantic.forEach(({ unitId }, rank) => {
-    const contribution = 1 / (RRF_K + 1 + rank);
+    const contribution = 1 / (60 + 1 + rank);
     const existing = merged.get(unitId);
     if (existing) {
       existing.score += contribution;
@@ -111,12 +106,137 @@ export async function hybridSearch(
     }));
 }
 
+async function semanticRanking(
+  worker: WorkerClient,
+  q: string,
+  limit: number,
+  groups?: Set<string>,
+): Promise<Array<{ unitId: string; score: number }>> {
+  const [vector] = await embedTexts(worker, [q]);
+  if (!vector) return []; // sidecar unavailable -> FTS-only
+  return nearestUnits(vector, limit, groups);
+}
+
+/** Minimal hit shapes for unit ids the FTS leg never saw. */
+async function hydrateSemantic(
+  unitIds: string[],
+  groups?: Set<string>,
+): Promise<SearchHit[]> {
+  if (unitIds.length === 0) return [];
+  const rows = (await AppDataSource.query(
+    `SELECT cu.id AS unit_id, cu.asset_id, cu.ordinal, cu.unit_type, cu.title,
+            substr(COALESCE(cu.text, ''), 1, 200) AS snip,
+            a.path AS asset_path, a.kind, a.group_id
+     FROM content_units cu JOIN assets a ON a.id = cu.asset_id
+     WHERE cu.id IN (${unitIds.map(() => "?").join(",")})`,
+    unitIds,
+  )) as Array<Record<string, unknown>>;
+  return rows
+    .filter((r) => groupOk(r.group_id as string | null, groups))
+    .map((r) => ({
+      unitId: r.unit_id as string,
+      assetId: r.asset_id as string,
+      ordinal: r.ordinal as number,
+      unitType: r.unit_type as string,
+      title: (r.title as string) ?? null,
+      snippet: (r.snip as string) ?? null,
+      fileName:
+        String(r.asset_path ?? "")
+          .split("/")
+          .pop() ?? "",
+      assetPath: r.asset_path as string,
+      kind: r.kind as string,
+      groupId: (r.group_id as string | null) ?? null,
+    }));
+}
+
+function groupOk(groupId: string | null, groups?: Set<string>): boolean {
+  if (!groups || groups.size === 0) return true;
+  return groupId ? groups.has(groupId) : groups.has("__ungrouped__");
+}
+
+// --- suggestions (as-you-type) ---
+
+export interface SuggestResponse {
+  terms: string[];
+  hits: Array<{
+    unitId: string;
+    assetId: string;
+    ordinal: number;
+    unitType: string;
+    title: string | null;
+    fileName: string;
+    kind: string;
+  }>;
+}
+
+const CUT_CHARS = new Set(
+  " \t，。、；：？！…—·,.;:?!()（）[]【】<>《》\"'`\n\r".split(""),
+);
+
+/** Completion candidates: windows starting at query occurrences in the
+ *  top hits' text, cut at word/punctuation boundaries, ranked by
+ *  frequency. Matching runs on whitespace-squished text (jieba-spaced
+ *  CJK still matches contiguous queries) with an index map back to the
+ *  original for phrase extraction. */
+function extractCompletions(
+  query: string,
+  texts: Array<string | null>,
+  max: number,
+): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const qSq = [...q].filter((c) => !/\s/.test(c)).join("");
+  if (!qSq) return [];
+  const counts = new Map<string, number>();
+  for (const raw of texts) {
+    if (!raw) continue;
+    // Squish with an index map: squished[i] -> original position.
+    const squished: string[] = [];
+    const map: number[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      if (/\s/.test(raw[i])) continue;
+      squished.push(raw[i].toLowerCase());
+      map.push(i);
+    }
+    const hay = squished.join("");
+    let from = 0;
+    for (let seen = 0; seen < 4; seen++) {
+      const i = hay.indexOf(qSq, from);
+      if (i < 0) break;
+      from = i + qSq.length;
+      const start = map[i];
+      // end in ORIGINAL coordinates: after match + up to 10 more
+      // non-punctuation chars.
+      let end = start + q.length;
+      const hardEnd = start + q.length + 12;
+      while (end < raw.length && !CUT_CHARS.has(raw[end]) && end < hardEnd) {
+        end++;
+      }
+      const phrase = raw.slice(start, end).trim();
+      if (phrase.length > q.length && phrase.length <= 24) {
+        counts.set(phrase, (counts.get(phrase) ?? 0) + 1);
+      }
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)
+    .map(([phrase]) => phrase)
+    .slice(0, max);
+}
+
 export function registerSearchRoutes(
   app: FastifyInstance,
   worker: WorkerClient,
 ) {
   app.get<{
-    Querystring: { q?: string; limit?: string; mode?: string };
+    Querystring: {
+      q?: string;
+      limit?: string;
+      mode?: string;
+      scope?: string;
+      groups?: string;
+    };
   }>("/api/search", async (request) => {
     const q = (request.query.q ?? "").trim();
     if (!q) return { hits: [] };
@@ -128,7 +248,46 @@ export function registerSearchRoutes(
       request.query.mode === "fts" || request.query.mode === "semantic"
         ? request.query.mode
         : "hybrid";
-    const hits = await hybridSearch(worker, q, limit, mode);
+    const scope: Scope =
+      request.query.scope === "content" || request.query.scope === "filename"
+        ? request.query.scope
+        : "everywhere";
+    const groups = request.query.groups
+      ? new Set(request.query.groups.split(",").filter(Boolean))
+      : undefined;
+    const hits = await hybridSearch(worker, q, limit, mode, { scope, groups });
     return { hits };
   });
+
+  // As-you-type suggestions: completion phrases + quick-jump page hits.
+  app.get<{ Querystring: { q?: string } }>(
+    "/api/search/suggest",
+    async (request) => {
+      const q = (request.query.q ?? "").trim();
+      if (q.length < 1)
+        return { terms: [], hits: [] } satisfies SuggestResponse;
+      const expr = prefixExpr(q);
+      const hits = expr ? await ftsSearch(expr, 20) : [];
+      const terms = extractCompletions(
+        q,
+        hits.flatMap((h) => [
+          (h.snippet ?? "").replaceAll("[", "").replaceAll("]", ""),
+          h.title ?? "",
+        ]),
+        8,
+      );
+      return {
+        terms,
+        hits: hits.slice(0, 3).map((h) => ({
+          unitId: h.unitId,
+          assetId: h.assetId,
+          ordinal: h.ordinal,
+          unitType: h.unitType,
+          title: h.title,
+          fileName: h.fileName,
+          kind: h.kind,
+        })),
+      } satisfies SuggestResponse;
+    },
+  );
 }

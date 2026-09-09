@@ -56,24 +56,40 @@ export interface SearchHit {
   fileName: string;
   assetPath: string;
   kind: string;
+  groupId: string | null;
 }
 
 export async function ftsSearch(
   matchExpr: string,
   limit = 50,
+  groups?: Set<string>,
 ): Promise<SearchHit[]> {
   if (!matchExpr) return [];
+  // Group filter (empty set = all). `__ungrouped__` selects null group.
+  let groupSql = "";
+  const params: unknown[] = [matchExpr];
+  if (groups && groups.size > 0) {
+    const ids = [...groups].filter((g) => g !== "__ungrouped__");
+    const wantsUngrouped = groups.has("__ungrouped__");
+    const clauses: string[] = [];
+    if (ids.length > 0) {
+      clauses.push(`a.group_id IN (${ids.map(() => "?").join(",")})`);
+      params.push(...ids);
+    }
+    if (wantsUngrouped) clauses.push("a.group_id IS NULL");
+    groupSql = ` AND (${clauses.join(" OR ")})`;
+  }
   const rows = await AppDataSource.query(
     `SELECT cu.id AS unit_id, cu.asset_id, cu.ordinal, cu.unit_type, cu.title,
-            a.path AS asset_path, a.kind,
+            a.path AS asset_path, a.kind, a.group_id,
             snippet(units_fts, 1, '[', ']', '…', 12) AS snip
      FROM units_fts
      JOIN content_units cu ON cu.rowid = units_fts.rowid
      JOIN assets a ON a.id = cu.asset_id
-     WHERE units_fts MATCH ?
+     WHERE units_fts MATCH ?${groupSql}
      ORDER BY rank
      LIMIT ?`,
-    [matchExpr, limit],
+    [...params, limit],
   );
   return rows.map((r: Record<string, unknown>) => ({
     unitId: r.unit_id as string,
@@ -88,5 +104,6 @@ export async function ftsSearch(
         .pop() ?? "",
     assetPath: r.asset_path as string,
     kind: r.kind as string,
+    groupId: (r.group_id as string | null) ?? null,
   }));
 }

@@ -3,17 +3,15 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
-import Input from "@/components/ui/Input.vue";
 import { api } from "@/api/client";
 import { fetchGroups, type GroupNode } from "@/api/library";
-import type { SearchField } from "@/search/engine";
-import { ChevronDown, Library, Search, X } from "lucide-vue-next";
-import { useSearchIndexStore } from "@/stores/searchIndex";
+import { ChevronDown, FileText, Library, Search, X } from "lucide-vue-next";
 
 /**
- * Home search. Centered hero layout; kind chips filter hits (client-side
- * post-filter on the engine result — the bundle already carries kind).
- * Clicking a hit navigates to the library detail view AT that page.
+ * Server-side search, search-engine style: typing fetches SUGGESTIONS
+ * (completion phrases + quick-jump page hits); Enter runs the full
+ * hybrid search. The browser-local index is gone — every query hits the
+ * server (FTS5 + embeddings, scope- and group-filtered there).
  */
 
 const KIND_FILTERS = [
@@ -28,78 +26,37 @@ const KIND_FILTERS = [
   { label: "Text", value: "text" },
 ] as const;
 
-const router = useRouter();
-
-const query = ref("");
-const hits = ref<DisplayHit[]>([]);
-const searched = ref(false);
-const busy = ref(false);
-const error = ref("");
-const kindFilter = ref<string>("");
-/** Query scope: body content only / content + filenames / filenames only. */
 type Scope = "content" | "everywhere" | "filename";
-const scope = ref<Scope>("everywhere");
 const SCOPES: Array<{ value: Scope; label: string }> = [
   { value: "content", label: "Content" },
   { value: "everywhere", label: "Content + filenames" },
   { value: "filename", label: "Filenames" },
 ];
-const scopeFields: Record<Scope, SearchField[] | undefined> = {
-  content: ["text", "title"],
-  everywhere: undefined,
-  filename: ["fileName"],
-};
 
-const searchIndex = useSearchIndexStore();
-
-// --- live search: results while typing (search-engine style) ---
-const composing = ref(false); // IME (pinyin etc.) mid-composition
-let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-const LIVE_DEBOUNCE_MS = 250;
-
-function liveSearch(): void {
-  if (debounceTimer) clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => {
-    debounceTimer = null;
-    // Only live against the local index; the server fallback stays
-    // submit-only (no request spam before the bundle is ready).
-    if (!searchIndex.ready) return;
-    if (query.value.trim()) void search();
-    else hits.value = [];
-  }, LIVE_DEBOUNCE_MS);
+interface ServerHit {
+  unitId: string;
+  assetId: string;
+  ordinal: number;
+  unitType: string;
+  title: string | null;
+  snippet: string | null;
+  fileName: string;
+  assetPath: string;
+  kind: string;
+  groupId?: string | null;
 }
 
-watch(query, () => {
-  if (composing.value) return;
-  liveSearch();
-});
-
-function onCompositionStart(): void {
-  composing.value = true;
-}
-
-function onCompositionEnd(): void {
-  composing.value = false;
-  liveSearch();
-}
-
-function clearQuery(): void {
-  query.value = "";
-  hits.value = [];
-  searched.value = false;
-}
-
-/** Render shape: engine hit + synthesized snippet parts. */
-interface DisplayHit {
+interface SuggestHit {
   unitId: string;
   assetId: string;
   ordinal: number;
   unitType: string;
   title: string | null;
   fileName: string;
-  assetPath: string;
   kind: string;
-  groupId: string | null;
+}
+
+interface DisplayHit extends ServerHit {
   parts: SnippetPart[];
 }
 
@@ -108,48 +65,151 @@ interface SnippetPart {
   hit: boolean;
 }
 
-/** Synthesize a snippet around the first term occurrence. Prefers the
- *  body text; falls back to the title / file name so a hit that matched
- *  there still highlights where it actually matched. */
-function buildSnippet(
-  text: string,
-  terms: string[],
-  title?: string | null,
-  fileName?: string,
-): SnippetPart[] {
-  const sources = [
-    { body: text, label: "" },
-    { body: title ?? "", label: "title · " },
-    { body: fileName ?? "", label: "file · " },
-  ];
-  for (const src of sources) {
-    if (!src.body) continue;
-    const norm = src.body.toLowerCase();
-    let idx = -1;
-    let len = 0;
-    for (const t of terms) {
-      const i = norm.indexOf(t.toLowerCase());
-      if (i >= 0 && (idx < 0 || i < idx)) {
-        idx = i;
-        len = t.length;
-      }
-    }
-    if (idx >= 0) {
-      const start = Math.max(0, idx - 40);
-      const end = Math.min(src.body.length, idx + len + 80);
-      const parts: SnippetPart[] = [];
-      if (src.label) parts.push({ text: src.label, hit: false });
-      if (start > 0) parts.push({ text: "…", hit: false });
-      parts.push({ text: src.body.slice(start, idx), hit: false });
-      parts.push({ text: src.body.slice(idx, idx + len), hit: true });
-      parts.push({ text: src.body.slice(idx + len, end), hit: false });
-      if (end < src.body.length) parts.push({ text: "…", hit: false });
-      return parts;
-    }
-  }
-  if (!text) return [];
-  return [{ text: text.slice(0, 120), hit: false }];
+const router = useRouter();
+const query = ref("");
+const hits = ref<DisplayHit[]>([]);
+const searched = ref(false);
+const busy = ref(false);
+const error = ref("");
+const kindFilter = ref<string>("");
+const scope = ref<Scope>("everywhere");
+
+// --- suggestions (as-you-type) ---
+
+const terms = ref<string[]>([]);
+const suggestHits = ref<SuggestHit[]>([]);
+const suggestOpen = ref(false);
+/** Highlighted row in the combined list: -1 = raw query, 0.. = items. */
+const suggestIndex = ref(-1);
+const composing = ref(false);
+let suggestTimer: ReturnType<typeof setTimeout> | null = null;
+
+type SuggestItem =
+  { kind: "term"; value: string } | { kind: "hit"; value: SuggestHit };
+
+const suggestItems = computed<SuggestItem[]>(() => [
+  ...terms.value.map((t): SuggestItem => ({ kind: "term", value: t })),
+  ...suggestHits.value.map((h): SuggestItem => ({ kind: "hit", value: h })),
+]);
+const suggestCount = computed(() => suggestItems.value.length);
+
+function requestSuggestions(): void {
+  if (suggestTimer) clearTimeout(suggestTimer);
+  suggestTimer = setTimeout(() => void fetchSuggestions(), 200);
 }
+
+async function fetchSuggestions(): Promise<void> {
+  const q = query.value.trim();
+  if (!q) {
+    terms.value = [];
+    suggestHits.value = [];
+    suggestOpen.value = false;
+    return;
+  }
+  try {
+    const res = await api<{ terms: string[]; hits: SuggestHit[] }>(
+      `/api/search/suggest?q=${encodeURIComponent(q)}`,
+    );
+    // Stale-response guard: a newer keystroke may have arrived.
+    if (q !== query.value.trim()) return;
+    terms.value = res.terms;
+    suggestHits.value = res.hits;
+    suggestIndex.value = -1;
+    suggestOpen.value = res.terms.length > 0 || res.hits.length > 0;
+  } catch {
+    /* suggestions are best-effort */
+  }
+}
+
+watch(query, () => {
+  if (composing.value) return;
+  requestSuggestions();
+});
+
+function onCompositionStart(): void {
+  composing.value = true;
+}
+function onCompositionEnd(): void {
+  composing.value = false;
+  requestSuggestions();
+}
+
+function closeSuggest(): void {
+  suggestOpen.value = false;
+}
+
+function chooseSuggestion(item: (typeof suggestItems.value)[number]): void {
+  closeSuggest();
+  if (item.kind === "term") {
+    query.value = item.value;
+    void submitSearch();
+  } else {
+    openHit(item.value);
+  }
+}
+
+function suggestKeydown(e: KeyboardEvent): void {
+  if (!suggestOpen.value || suggestCount.value === 0) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    suggestIndex.value = (suggestIndex.value + 1) % suggestCount.value;
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    suggestIndex.value =
+      suggestIndex.value <= 0 ? suggestCount.value - 1 : suggestIndex.value - 1;
+  } else if (e.key === "Escape") {
+    closeSuggest();
+  } else if (e.key === "Enter" && suggestIndex.value >= 0) {
+    e.preventDefault();
+    chooseSuggestion(suggestItems.value[suggestIndex.value]!);
+  }
+}
+
+// --- group filter (multi-select, applied server-side) ---
+
+const UNGROUPED = "__ungrouped__";
+const groups = ref<GroupNode[]>([]);
+const ungroupedCount = ref(0);
+const groupPanelOpen = ref(false);
+const selectedGroups = ref(new Set<string>());
+
+// --- full search (Enter) ---
+
+function groupParams(): string {
+  if (!groupFilterActive.value) return "";
+  return `&groups=${encodeURIComponent([...selectedGroups.value].join(","))}`;
+}
+
+async function submitSearch(): Promise<void> {
+  const q = query.value.trim();
+  if (!q) {
+    hits.value = [];
+    searched.value = false;
+    return;
+  }
+  closeSuggest();
+  error.value = "";
+  busy.value = true;
+  try {
+    const res = await api<{ hits: ServerHit[] }>(
+      `/api/search?q=${encodeURIComponent(q)}&limit=50&scope=${scope.value}${groupParams()}`,
+    );
+    hits.value = res.hits.map((h) => ({
+      ...h,
+      parts: parseSnippet(h.snippet),
+    }));
+  } catch (err) {
+    error.value = String(err);
+  } finally {
+    searched.value = true;
+    busy.value = false;
+  }
+}
+
+/** Re-run when scope/groups change (they are part of the query now). */
+watch([scope, selectedGroups], () => {
+  if (query.value.trim()) void submitSearch();
+});
 
 /** Split "[foo] bar [baz]" snippets into highlightable parts. */
 function parseSnippet(snippet: string | null): SnippetPart[] {
@@ -169,86 +229,42 @@ function parseSnippet(snippet: string | null): SnippetPart[] {
   return parts;
 }
 
-interface ServerHit {
-  unitId: string;
-  assetId: string;
-  ordinal: number;
-  unitType: string;
-  title: string | null;
-  snippet: string | null;
-  fileName: string;
-  assetPath: string;
-  kind: string;
-  groupId?: string | null;
-}
+const filteredHits = computed(() =>
+  kindFilter.value
+    ? hits.value.filter((h) => h.kind === kindFilter.value)
+    : hits.value,
+);
 
-function doLocalSearch(q: string): DisplayHit[] {
-  const results = searchIndex.engine.search(q, 50, {
-    fields: scopeFields[scope.value],
-  });
-  return results.map((hit) => {
-    const u = hit.unit;
-    return {
-      unitId: u.id,
-      assetId: u.assetId,
-      ordinal: u.ordinal,
-      unitType: u.unitType,
-      title: u.title,
-      fileName: u.fileName,
-      assetPath: u.sourcePath,
-      kind: u.kind,
-      groupId: u.groupId ?? null,
-      parts: buildSnippet(u.text ?? "", hit.terms, u.title, u.fileName),
-    };
+const kindCounts = computed(() => {
+  const counts = new Map<string, number>();
+  for (const h of hits.value) counts.set(h.kind, (counts.get(h.kind) ?? 0) + 1);
+  return counts;
+});
+
+/** Navigate to the library detail view at the hit's page. */
+function openHit(hit: SuggestHit | ServerHit): void {
+  void router.push({
+    name: "asset-detail",
+    params: { id: hit.assetId },
+    query:
+      hit.unitType === "page" ||
+      hit.unitType === "slide" ||
+      hit.unitType === "sheet"
+        ? { page: String(hit.ordinal) }
+        : {},
   });
 }
 
-function doServerSearchSync(hits: ServerHit[]): DisplayHit[] {
-  return hits.map((h) => ({
-    ...h,
-    groupId: h.groupId ?? null,
-    parts: parseSnippet(h.snippet),
-  }));
+function clearQuery(): void {
+  query.value = "";
+  hits.value = [];
+  searched.value = false;
+  terms.value = [];
+  suggestHits.value = [];
+  suggestOpen.value = false;
 }
 
-async function search() {
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-    debounceTimer = null;
-  }
-  const q = query.value.trim();
-  if (!q) {
-    hits.value = [];
-    return;
-  }
-  error.value = "";
-  if (searchIndex.ready) {
-    hits.value = doLocalSearch(q);
-    searched.value = true;
-    return;
-  }
-  // Bundle not loaded yet: server-side fallback this once.
-  busy.value = true;
-  try {
-    const res = await api<{ hits: ServerHit[] }>(
-      `/api/search?q=${encodeURIComponent(q)}`,
-    );
-    hits.value = doServerSearchSync(res.hits);
-  } catch (err) {
-    error.value = String(err);
-  } finally {
-    searched.value = true;
-    busy.value = false;
-  }
-}
-
-// --- group filter (multi-select over the knowledge-base tree) ---
-
-const UNGROUPED = "__ungrouped__";
-const groups = ref<GroupNode[]>([]);
-const ungroupedCount = ref(0);
-const groupPanelOpen = ref(false);
-const selectedGroups = ref(new Set<string>());
+// --- group filter (multi-select, applied server-side) ---
 
 async function loadGroups(): Promise<void> {
   try {
@@ -259,7 +275,6 @@ async function loadGroups(): Promise<void> {
     groups.value = [];
   }
 }
-void loadGroups();
 
 function flattenGroups(
   nodes: GroupNode[],
@@ -284,90 +299,102 @@ function clearGroups(): void {
 
 const groupFilterActive = computed(() => selectedGroups.value.size > 0);
 
-const filteredHits = computed(() => {
-  let out = hits.value;
-  if (kindFilter.value) out = out.filter((h) => h.kind === kindFilter.value);
-  if (groupFilterActive.value) {
-    const sel = selectedGroups.value;
-    out = out.filter((h) =>
-      h.groupId ? sel.has(h.groupId) : sel.has(UNGROUPED),
-    );
-  }
-  return out;
-});
-
-/** Per-kind hit counts for the chips (computed pre-filter). */
-const kindCounts = computed(() => {
-  const counts = new Map<string, number>();
-  for (const h of hits.value) counts.set(h.kind, (counts.get(h.kind) ?? 0) + 1);
-  return counts;
-});
-
-/** Navigate to the library detail view at the hit's page. */
-function openHit(hit: DisplayHit): void {
-  void router.push({
-    name: "asset-detail",
-    params: { id: hit.assetId },
-    query:
-      hit.unitType === "page" ||
-      hit.unitType === "slide" ||
-      hit.unitType === "sheet"
-        ? { page: String(hit.ordinal) }
-        : {},
-  });
-}
-
-// Scope is part of the query — switching it re-runs the search.
-watch(scope, () => {
-  if (query.value.trim()) void search();
-});
-
 onMounted(() => {
-  void searchIndex.init();
+  void loadGroups();
 });
 </script>
 
 <template>
   <div class="mx-auto flex min-h-[70vh] max-w-2xl flex-col px-4">
-    <!-- Hero: quiet title, protagonist input -->
+    <!-- Hero: quiet title, protagonist input with suggestion dropdown -->
     <div class="mb-5 mt-[9vh] text-center">
       <p
         class="mb-4 text-[11px] font-medium uppercase tracking-[0.22em] text-muted-foreground"
       >
         Knowledge Base
       </p>
-      <form
-        class="mx-auto flex max-w-xl items-center gap-2 rounded-xl border bg-background p-1.5 pl-4 shadow-sm transition-shadow focus-within:shadow-md focus-within:ring-1 focus-within:ring-ring"
-        @submit.prevent="search"
-      >
-        <Search
-          class="h-4 w-4 shrink-0 text-muted-foreground"
-          aria-hidden="true"
-        />
-        <input
-          v-model="query"
-          placeholder="Search pages, slides, transcripts…"
-          class="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
-          autocomplete="off"
-          spellcheck="false"
-          @compositionstart="onCompositionStart"
-          @compositionend="onCompositionEnd"
-        />
-        <button
-          v-if="query"
-          class="shrink-0 rounded-full p-1 text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
-          aria-label="Clear search"
-          type="button"
-          @click="clearQuery"
+      <div class="relative mx-auto max-w-xl">
+        <form
+          class="flex items-center gap-2 rounded-xl border bg-background p-1.5 pl-4 shadow-sm transition-shadow focus-within:shadow-md focus-within:ring-1 focus-within:ring-ring"
+          @submit.prevent="submitSearch"
         >
-          <X class="h-3.5 w-3.5" />
-        </button>
-        <Button type="submit" size="sm" :disabled="busy">Search</Button>
-      </form>
+          <Search
+            class="h-4 w-4 shrink-0 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <input
+            v-model="query"
+            placeholder="Search pages, slides, transcripts…"
+            class="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
+            autocomplete="off"
+            spellcheck="false"
+            @compositionstart="onCompositionStart"
+            @compositionend="onCompositionEnd"
+            @keydown="suggestKeydown"
+          />
+          <button
+            v-if="query"
+            class="shrink-0 rounded-full p-1 text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+            aria-label="Clear search"
+            type="button"
+            @click="clearQuery"
+          >
+            <X class="h-3.5 w-3.5" />
+          </button>
+          <Button type="submit" size="sm" :disabled="busy">Search</Button>
+        </form>
+
+        <!-- Suggestion dropdown (terms + quick-jump hits) -->
+        <div
+          v-if="suggestOpen && suggestCount > 0"
+          class="absolute inset-x-0 top-full z-40 mt-2 overflow-hidden rounded-xl border bg-background py-1 text-left shadow-lg"
+          @mousedown.prevent
+        >
+          <button
+            v-for="(item, i) in suggestItems"
+            :key="
+              item.kind === 'hit'
+                ? 'hit-' + item.value.unitId
+                : 'term-' + item.value
+            "
+            class="flex w-full items-center gap-2.5 px-4 py-2 text-sm transition-colors"
+            :class="i === suggestIndex ? 'bg-accent' : 'hover:bg-accent/60'"
+            @click="chooseSuggestion(item)"
+            @mouseenter="suggestIndex = i"
+          >
+            <Search
+              v-if="item.kind === 'term'"
+              class="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+            />
+            <FileText
+              v-else
+              class="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+            />
+            <span v-if="item.kind === 'term'" class="min-w-0 truncate">
+              <span class="font-medium">{{ query }}</span>
+              <span class="text-muted-foreground">{{
+                item.value.slice(query.length)
+              }}</span>
+            </span>
+            <span v-else class="min-w-0 flex-1 truncate">
+              <span class="font-medium">{{ item.value.fileName }}</span>
+              <span class="ml-1.5 text-xs text-muted-foreground">
+                {{ item.value.unitType }} {{ item.value.ordinal }}
+              </span>
+            </span>
+            <span
+              v-if="item.kind === 'hit'"
+              class="shrink-0 text-[11px] text-muted-foreground/70"
+            >
+              jump
+            </span>
+          </button>
+        </div>
+      </div>
     </div>
+
     <!-- Filters: available BEFORE searching (scope + type + groups) -->
     <div class="mb-6 flex flex-col items-center gap-3">
-      <!-- Scope: content / content+filenames / filenames -->
       <div
         class="inline-flex overflow-hidden rounded-full border bg-background text-xs"
         role="group"
@@ -376,7 +403,7 @@ onMounted(() => {
         <button
           v-for="sc in SCOPES"
           :key="sc.value"
-          class="px-3 py-1.5 transition-colors first:rounded-l-full last:rounded-r-full"
+          class="px-3 py-1.5 transition-colors"
           :class="
             scope === sc.value
               ? 'bg-primary text-primary-foreground'
@@ -389,7 +416,6 @@ onMounted(() => {
         </button>
       </div>
 
-      <!-- Kind chips (counts appear after a search) -->
       <div class="flex flex-wrap justify-center gap-1.5">
         <button
           v-for="f in KIND_FILTERS"
@@ -413,7 +439,6 @@ onMounted(() => {
         </button>
       </div>
 
-      <!-- Groups entry -->
       <div class="w-full">
         <button
           class="mx-auto flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent"
@@ -487,7 +512,7 @@ onMounted(() => {
       v-else-if="searched && hits.length === 0"
       class="text-center text-sm text-muted-foreground"
     >
-      No results. Try different keywords or upload to the library.
+      No results. Try different keywords or adjust the filters.
     </p>
     <p
       v-else-if="searched && filteredHits.length === 0"

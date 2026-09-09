@@ -20,7 +20,6 @@ import { registerAssetRoutes } from "./routes/assets";
 import { registerLibraryRoutes } from "./routes/library";
 import { registerSearchRoutes } from "./routes/search";
 import { registerJobRoutes } from "./routes/jobs";
-import { registerIndexRoutes } from "./routes/index";
 import { registerExportRoutes } from "./routes/export";
 import { registerAgentRoutes } from "./routes/agent";
 import { registerMcp } from "./mcp";
@@ -172,7 +171,6 @@ async function main(): Promise<void> {
   registerLibraryRoutes(app);
   registerSearchRoutes(app, worker);
   registerJobRoutes(app);
-  registerIndexRoutes(app);
   registerExportRoutes(app);
   registerAgentRoutes(app, worker);
   registerMcp(app, { jwtSecret, worker });
