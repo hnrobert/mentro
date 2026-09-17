@@ -34,6 +34,11 @@ const router = createRouter({
       name: "settings-users",
       component: () => import("@/views/SettingsView.vue"),
     },
+    {
+      path: "/settings/groups",
+      name: "settings-groups",
+      component: () => import("@/views/SettingsView.vue"),
+    },
   ],
 });
 

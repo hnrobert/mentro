@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { AppDataSource } from "../db/data-source";
 import { Asset, ContentUnit } from "../db/entities";
 import type { WorkerPool } from "../worker/pool";
+import { canRead, readableAssetIds } from "../auth/perm";
 
 /** Kinds whose pages can be lazily rendered to preview images. */
 const RENDERABLE = new Set(["pdf", "presentation", "document"]);
@@ -24,16 +25,19 @@ export function registerAssetRoutes(app: FastifyInstance, pool?: WorkerPool) {
       Math.max(1, Number(request.query.pageSize ?? 30) || 30),
     );
     const repo = AppDataSource.getRepository(Asset);
+    const readable = await readableAssetIds(request.user!);
     const where: Record<string, string> = {};
     if (kind) where.kind = kind;
     if (status) where.extractionStatus = status;
-    const [items, total] = await repo.findAndCount({
+    const [items] = await repo.findAndCount({
       where,
       order: { path: "ASC" },
       skip: (page - 1) * pageSize,
       take: pageSize,
     });
-    return { total, page, pageSize, assets: items };
+    const visible =
+      readable === "all" ? items : items.filter((a) => readable.has(a.id));
+    return { total: visible.length, page, pageSize, assets: visible };
   });
 
   app.get<{ Params: { id: string } }>(
@@ -43,6 +47,9 @@ export function registerAssetRoutes(app: FastifyInstance, pool?: WorkerPool) {
         id: request.params.id,
       });
       if (!asset) return reply.code(404).send({ error: "not found" });
+      if (!(await canRead(request.user!, asset.id))) {
+        return reply.code(403).send({ error: "forbidden" });
+      }
       const units = await AppDataSource.getRepository(ContentUnit).find({
         where: { assetId: asset.id },
         order: { ordinal: "ASC" },
@@ -59,6 +66,9 @@ export function registerAssetRoutes(app: FastifyInstance, pool?: WorkerPool) {
       });
       if (!asset || !fs.existsSync(asset.path)) {
         return reply.code(404).send({ error: "not found" });
+      }
+      if (!(await canRead(request.user!, asset.id))) {
+        return reply.code(403).send({ error: "forbidden" });
       }
       reply.header(
         "content-disposition",
@@ -82,6 +92,9 @@ export function registerAssetRoutes(app: FastifyInstance, pool?: WorkerPool) {
       });
       if (!unit) {
         return reply.code(404).send({ error: "unit not found" });
+      }
+      if (!(await canRead(request.user!, unit.assetId))) {
+        return reply.code(403).send({ error: "forbidden" });
       }
       const dataDir = process.env.MENTRO_DATA ?? "./data";
       const full = request.query.full === "1";
@@ -135,6 +148,9 @@ export function registerAssetRoutes(app: FastifyInstance, pool?: WorkerPool) {
         id: request.params.id,
       });
       if (!asset) return reply.code(404).send({ error: "not found" });
+      if (!(await canRead(request.user!, asset.id))) {
+        return reply.code(403).send({ error: "forbidden" });
+      }
       const dataDir = process.env.MENTRO_DATA ?? "./data";
       const pdf = path.join(dataDir, "render", `${asset.id}.pdf`);
       if (!fs.existsSync(pdf)) {

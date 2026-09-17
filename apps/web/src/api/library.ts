@@ -8,6 +8,7 @@ export interface GroupNode {
   parentId: string | null;
   sortOrder: number;
   fileCount: number;
+  visibility: "internal" | "public";
   children: GroupNode[];
 }
 

@@ -25,8 +25,12 @@ interface UserRow {
   createdAt: string;
 }
 
-const tab = ref<"sources" | "users">(
-  route.name === "settings-users" ? "users" : "sources",
+const tab = ref<"sources" | "users" | "groups">(
+  route.name === "settings-users"
+    ? "users"
+    : route.name === "settings-groups"
+      ? "groups"
+      : "sources",
 );
 const sources = ref<SourceRow[]>([]);
 const users = ref<UserRow[]>([]);
@@ -137,7 +141,85 @@ async function removeUser(u: UserRow): Promise<void> {
   await loadUsers();
 }
 
+// --- user groups (admin) ---
+
+interface UserGroupRow {
+  id: string;
+  name: string;
+  memberIds: string[];
+  _open?: boolean;
+}
+
+const userGroups = ref<UserGroupRow[]>([]);
+const newGroupName = ref("");
+const groupsError = ref("");
+
+async function loadUserGroups(): Promise<void> {
+  try {
+    const res = await api<{ groups: UserGroupRow[] }>("/api/admin/user-groups");
+    userGroups.value = res.groups.map((g) => ({ ...g, _open: false }));
+  } catch (err) {
+    groupsError.value = String(err);
+  }
+}
+
+async function createUserGroup(): Promise<void> {
+  const name = newGroupName.value.trim();
+  if (!name) return;
+  groupsError.value = "";
+  try {
+    await api("/api/admin/user-groups", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    newGroupName.value = "";
+    await loadUserGroups();
+  } catch (err) {
+    groupsError.value = String(err);
+  }
+}
+
+async function renameUserGroup(g: UserGroupRow): Promise<void> {
+  try {
+    await api(`/api/admin/user-groups/${g.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name: g.name.trim() }),
+    });
+  } catch (err) {
+    groupsError.value = String(err);
+  }
+}
+
+async function deleteUserGroup(g: UserGroupRow): Promise<void> {
+  try {
+    await api(`/api/admin/user-groups/${g.id}`, { method: "DELETE" });
+    await loadUserGroups();
+  } catch (err) {
+    groupsError.value = String(err);
+  }
+}
+
+function toggleMembers(g: UserGroupRow): void {
+  g._open = !g._open;
+}
+
+async function toggleMember(g: UserGroupRow, userId: string): Promise<void> {
+  const next = g.memberIds.includes(userId)
+    ? g.memberIds.filter((id) => id !== userId)
+    : [...g.memberIds, userId];
+  g.memberIds = next;
+  try {
+    await api(`/api/admin/user-groups/${g.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ memberIds: next }),
+    });
+  } catch (err) {
+    groupsError.value = String(err);
+  }
+}
+
 onMounted(() => {
+  void loadUserGroups();
   void loadSources();
   void loadUsers();
 });
@@ -204,6 +286,80 @@ onMounted(() => {
     </template>
 
     <!-- Users tab -->
+    <template v-else-if="tab === 'groups'">
+      <div class="space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold">User Groups</h2>
+          <div class="flex items-center gap-2">
+            <Input
+              v-model="newGroupName"
+              placeholder="New group name"
+              class="h-8 w-44"
+              @keydown.enter="createUserGroup"
+            />
+            <Button
+              size="sm"
+              :disabled="!newGroupName.trim()"
+              @click="createUserGroup"
+            >
+              Create
+            </Button>
+          </div>
+        </div>
+        <p v-if="groupsError" class="text-xs text-destructive">
+          {{ groupsError }}
+        </p>
+        <p v-if="userGroups.length === 0" class="text-sm text-muted-foreground">
+          No user groups yet — create one, then grant it permissions on
+          folders/files from the Library.
+        </p>
+        <div v-for="g in userGroups" :key="g.id" class="rounded-lg border p-3">
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <input
+                v-model="g.name"
+                class="h-8 rounded border border-input bg-background px-2 text-sm"
+                @change="renameUserGroup(g)"
+              />
+              <span class="text-xs text-muted-foreground">
+                {{ g.memberIds.length }} member{{
+                  g.memberIds.length === 1 ? "" : "s"
+                }}
+              </span>
+            </div>
+            <div class="flex items-center gap-1">
+              <Button size="sm" variant="ghost" @click="toggleMembers(g)">
+                {{ g._open ? "Hide members" : "Members" }}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                class="text-destructive"
+                @click="deleteUserGroup(g)"
+              >
+                Delete
+              </Button>
+            </div>
+          </div>
+          <div v-if="g._open" class="mt-2 border-t pt-2">
+            <label
+              v-for="u in users"
+              :key="u.id"
+              class="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-accent/40"
+            >
+              <input
+                type="checkbox"
+                :checked="g.memberIds.includes(u.id)"
+                @change="toggleMember(g, u.id)"
+              />
+              {{ u.username }}
+              <span class="text-xs text-muted-foreground">{{ u.role }}</span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <template v-else>
       <label class="mb-4 flex items-center gap-2 text-sm">
         <input

@@ -52,8 +52,15 @@ export class Asset {
   @Column({ name: "group_id", type: "text", nullable: true })
   groupId!: string | null;
 
-  /** Add time: upload moment for uploads, first-index time for mounts.
-   *  Survives re-index (mtime tracks the file's own clock). */
+  /** `public` = readable by every signed-in user (对外); `internal`
+   *  needs an ACL grant (or admin / uploader). */
+  @Column({
+    type: "text",
+    nullable: false,
+    default: "internal",
+  })
+  visibility!: "internal" | "public";
+
   @Column({ name: "uploaded_at", type: "datetime", nullable: true })
   uploadedAt!: Date | null;
 

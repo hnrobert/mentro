@@ -5,6 +5,7 @@ import { Asset, ContentUnit, Job } from "../db/entities";
 import { hybridSearch } from "./search";
 import { createExportJob } from "./export";
 import type { WorkerClient } from "../worker/client";
+import { canRead } from "../auth/perm";
 
 /**
  * Agent Tool API (M6): the read/search/export surface an autonomous
@@ -46,6 +47,9 @@ export function registerAgentRoutes(
         id: request.params.id,
       });
       if (!asset) return reply.code(404).send({ error: "not found" });
+      if (!(await canRead(request.user!, asset.id))) {
+        return reply.code(403).send({ error: "forbidden" });
+      }
       const units = await AppDataSource.getRepository(ContentUnit).find({
         where: { assetId: asset.id },
         order: { ordinal: "ASC" },
@@ -72,6 +76,9 @@ export function registerAgentRoutes(
         id: request.params.id,
       });
       if (!unit) return reply.code(404).send({ error: "not found" });
+      if (!(await canRead(request.user!, unit.assetId))) {
+        return reply.code(403).send({ error: "forbidden" });
+      }
       const asset = await AppDataSource.getRepository(Asset).findOneBy({
         id: unit.assetId,
       });
@@ -88,6 +95,9 @@ export function registerAgentRoutes(
       id: unitId,
     });
     if (!unit) return reply.code(404).send({ error: "unit not found" });
+    if (!(await canRead(request.user!, unit.assetId))) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
     const before = Math.min(
       10,
       Math.max(0, Number(request.query.before ?? 1) || 0),
@@ -129,6 +139,9 @@ export function registerAgentRoutes(
         id: request.params.assetId,
       });
       if (!asset) return reply.code(404).send({ error: "asset not found" });
+      if (!(await canRead(request.user!, asset.id))) {
+        return reply.code(403).send({ error: "forbidden" });
+      }
       if (asset.kind !== "audio" && asset.kind !== "video") {
         return reply
           .code(400)

@@ -63,6 +63,7 @@ export async function ftsSearch(
   matchExpr: string,
   limit = 50,
   groups?: Set<string>,
+  readable?: Set<string>,
 ): Promise<SearchHit[]> {
   if (!matchExpr) return [];
   // Group filter (empty set = all). `__ungrouped__` selects null group.
@@ -79,6 +80,12 @@ export async function ftsSearch(
     if (wantsUngrouped) clauses.push("a.group_id IS NULL");
     groupSql = ` AND (${clauses.join(" OR ")})`;
   }
+  let readableSql = "";
+  const readableParams: unknown[] = [];
+  if (readable) {
+    readableSql = ` AND cu.asset_id IN (${[...readable].map(() => "?").join(",") || "''"})`;
+    readableParams.push(...[...readable]);
+  }
   const rows = await AppDataSource.query(
     `SELECT cu.id AS unit_id, cu.asset_id, cu.ordinal, cu.unit_type, cu.title,
             a.path AS asset_path, a.kind, a.group_id,
@@ -86,10 +93,10 @@ export async function ftsSearch(
      FROM units_fts
      JOIN content_units cu ON cu.rowid = units_fts.rowid
      JOIN assets a ON a.id = cu.asset_id
-     WHERE units_fts MATCH ?${groupSql}
+     WHERE units_fts MATCH ?${groupSql}${readableSql}
      ORDER BY rank
      LIMIT ?`,
-    [...params, limit],
+    [...params, ...readableParams, limit],
   );
   return rows.map((r: Record<string, unknown>) => ({
     unitId: r.unit_id as string,

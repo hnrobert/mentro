@@ -7,6 +7,7 @@ import { countEmbeddings } from "./search/embeddings";
 import { createExportJob } from "./routes/export";
 import { hybridSearch } from "./routes/search";
 import type { WorkerClient } from "./worker/client";
+import { canRead } from "./auth/perm";
 
 /**
  * MCP (Model Context Protocol) endpoint — the Agent Tool API exposed in
@@ -118,11 +119,14 @@ function buildTools(worker: WorkerClient): ToolDef[] {
         properties: { assetId: { type: "string" } },
         required: ["assetId"],
       },
-      handler: async (args) => {
+      handler: async (args, request) => {
         const asset = await AppDataSource.getRepository(Asset).findOneBy({
           id: str(args, "assetId"),
         });
         if (!asset) return { error: "asset not found" };
+        if (!(await canRead(request.user!, asset.id))) {
+          return { error: "forbidden" };
+        }
         const units = await AppDataSource.getRepository(ContentUnit).find({
           where: { assetId: asset.id },
           order: { ordinal: "ASC" },
@@ -155,11 +159,14 @@ function buildTools(worker: WorkerClient): ToolDef[] {
         properties: { unitId: { type: "string" } },
         required: ["unitId"],
       },
-      handler: async (args) => {
+      handler: async (args, request) => {
         const unit = await AppDataSource.getRepository(ContentUnit).findOneBy({
           id: str(args, "unitId"),
         });
         if (!unit) return { error: "unit not found" };
+        if (!(await canRead(request.user!, unit.assetId))) {
+          return { error: "forbidden" };
+        }
         return {
           unit,
           fileUrl: `/api/assets/${unit.assetId}/file`,
@@ -180,11 +187,14 @@ function buildTools(worker: WorkerClient): ToolDef[] {
         },
         required: ["unitId"],
       },
-      handler: async (args) => {
+      handler: async (args, request) => {
         const unit = await AppDataSource.getRepository(ContentUnit).findOneBy({
           id: str(args, "unitId"),
         });
         if (!unit) return { error: "unit not found" };
+        if (!(await canRead(request.user!, unit.assetId))) {
+          return { error: "forbidden" };
+        }
         const before = Math.min(10, Math.max(0, num(args, "before", 1)));
         const after = Math.min(10, Math.max(0, num(args, "after", 1)));
         return {
@@ -248,11 +258,14 @@ function buildTools(worker: WorkerClient): ToolDef[] {
         properties: { assetId: { type: "string" } },
         required: ["assetId"],
       },
-      handler: async (args) => {
+      handler: async (args, request) => {
         const asset = await AppDataSource.getRepository(Asset).findOneBy({
           id: str(args, "assetId"),
         });
         if (!asset) return { error: "asset not found" };
+        if (!(await canRead(request.user!, asset.id))) {
+          return { error: "forbidden" };
+        }
         if (asset.kind !== "audio" && asset.kind !== "video") {
           return { error: `kind ${asset.kind} has no audio track` };
         }

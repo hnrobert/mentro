@@ -10,6 +10,7 @@ import { ftsDeleteAsset } from "../search/fts";
 import { logRemoved, logUpserted, unitIdsOfAsset } from "../indexbundle";
 import { serializedTx } from "../db/tx";
 import { publish } from "../bus";
+import { readableAssetIds, canWrite } from "../auth/perm";
 
 interface GroupNode {
   id: string;
@@ -17,27 +18,27 @@ interface GroupNode {
   parentId: string | null;
   sortOrder: number;
   fileCount: number;
+  visibility: "internal" | "public";
   children: GroupNode[];
 }
 
 export function registerLibraryRoutes(app: FastifyInstance) {
-  app.get("/api/groups", async () => {
+  app.get("/api/groups", async (request) => {
     const repo = AppDataSource.getRepository(Group);
-    const [groups, counts] = await Promise.all([
+    const readable = await readableAssetIds(request.user!);
+    const [groups, assets] = await Promise.all([
       repo.find({ order: { sortOrder: "ASC", name: "ASC" } }),
-      AppDataSource.getRepository(Asset)
-        .createQueryBuilder("a")
-        .select("a.group_id", "gid")
-        .addSelect("COUNT(*)", "n")
-        .groupBy("a.group_id")
-        .getRawMany(),
+      AppDataSource.getRepository(Asset).find({
+        select: { id: true, groupId: true },
+      }),
     ]);
-    const countByGid = new Map(
-      counts.map((r: { gid: string | null; n: number }) => [
-        r.gid,
-        Number(r.n),
-      ]),
-    );
+    // ACL: visible file count per group (admins keep raw counts).
+    const visibleByGroup = new Map<string | null, number>();
+    for (const a of assets) {
+      if (readable === "all" || readable.has(a.id)) {
+        visibleByGroup.set(a.groupId, (visibleByGroup.get(a.groupId) ?? 0) + 1);
+      }
+    }
     const nodes = new Map<string, GroupNode>();
     for (const g of groups) {
       nodes.set(g.id, {
@@ -45,7 +46,8 @@ export function registerLibraryRoutes(app: FastifyInstance) {
         name: g.name,
         parentId: g.parentId,
         sortOrder: g.sortOrder,
-        fileCount: countByGid.get(g.id) ?? 0,
+        fileCount: visibleByGroup.get(g.id) ?? 0,
+        visibility: g.visibility,
         children: [],
       });
     }
@@ -57,7 +59,10 @@ export function registerLibraryRoutes(app: FastifyInstance) {
         roots.push(node);
       }
     }
-    return { groups: roots, ungrouped: countByGid.get(null) ?? 0 };
+    return {
+      groups: roots,
+      ungrouped: visibleByGroup.get(null) ?? 0,
+    };
   });
 
   app.post<{ Body: { name: string; parentId?: string | null } }>(
@@ -140,6 +145,15 @@ export function registerLibraryRoutes(app: FastifyInstance) {
     );
     const repo = AppDataSource.getRepository(Asset);
     const qb = repo.createQueryBuilder("a");
+    // ACL: non-admins only see readable assets.
+    const readable = await readableAssetIds(request.user!);
+    if (readable !== "all") {
+      // Named list parameter: mixing positional `?` with later :named
+      // params breaks better-sqlite3 binding order.
+      qb.andWhere("a.id IN (:...readableIds)", {
+        readableIds: [...readable],
+      });
+    }
     if (groupId === "ungrouped") qb.andWhere("a.group_id IS NULL");
     else if (groupId) qb.andWhere("a.group_id = :gid", { gid: groupId });
     if (kind) qb.andWhere("a.kind = :kind", { kind });
@@ -180,10 +194,13 @@ export function registerLibraryRoutes(app: FastifyInstance) {
     return { total, page, pageSize, assets: items };
   });
 
-  // Move asset to a group.
+  // Move asset to a group (admin or asset write).
   app.patch<{ Params: { id: string }; Body: { groupId: string | null } }>(
     "/api/assets/:id/group",
     async (request, reply) => {
+      if (!(await canWrite(request.user!, request.params.id))) {
+        return reply.code(403).send({ error: "no write permission" });
+      }
       const repo = AppDataSource.getRepository(Asset);
       const asset = await repo.findOneBy({ id: request.params.id });
       if (!asset) return reply.code(404).send({ error: "not found" });

@@ -4,6 +4,8 @@ import { ftsMatchExpr } from "../search/segment";
 import { ftsSearch, type SearchHit } from "../search/fts";
 import { embedTexts, nearestUnits } from "../search/embeddings";
 import type { WorkerClient } from "../worker/client";
+import { readableAssetIds } from "../auth/perm";
+import type { FastifyRequest } from "fastify";
 
 /**
  * Server-side search: the ONLY search path (the browser-local index was
@@ -42,8 +44,9 @@ export async function hybridSearch(
   q: string,
   limit: number,
   mode: "fts" | "semantic" | "hybrid" = "hybrid",
-  opts: { scope?: Scope; groups?: Set<string> } = {},
+  opts: { scope?: Scope; groups?: Set<string>; readable?: Set<string> } = {},
 ): Promise<SearchHit[]> {
+  const readable = opts.readable; // undefined = no ACL restriction (admin)
   const [ftsHits, semantic] = await Promise.all([
     mode === "semantic"
       ? Promise.resolve([])
@@ -51,10 +54,11 @@ export async function hybridSearch(
           scopedExpr(q, opts.scope ?? "everywhere"),
           limit,
           opts.groups,
+          readable,
         ),
     mode === "fts"
       ? Promise.resolve([])
-      : semanticRanking(worker, q, limit, opts.groups),
+      : semanticRanking(worker, q, limit, opts.groups, readable),
   ]);
 
   const merged = new Map<
@@ -74,6 +78,7 @@ export async function hybridSearch(
   const hydrated = await hydrateSemantic(
     semOnly.map((s) => s.unitId),
     opts.groups,
+    readable,
   );
   const hydratedById = new Map(hydrated.map((h) => [h.unitId, h]));
 
@@ -111,16 +116,38 @@ async function semanticRanking(
   q: string,
   limit: number,
   groups?: Set<string>,
+  readable?: Set<string>,
 ): Promise<Array<{ unitId: string; score: number }>> {
   const [vector] = await embedTexts(worker, [q]);
   if (!vector) return []; // sidecar unavailable -> FTS-only
-  return nearestUnits(vector, limit, groups);
+  const ranked = await nearestUnits(
+    vector,
+    readable ? limit * 4 : limit,
+    groups,
+  );
+  if (!readable) return ranked.slice(0, limit);
+  // Over-fetch, then drop unreadable ids (unit -> asset hydration filters).
+  const allowed = await assetsOfUnits(ranked.map((r) => r.unitId));
+  return ranked
+    .filter((r) => readable.has(allowed.get(r.unitId) ?? ""))
+    .slice(0, limit);
+}
+
+/** unitId -> assetId map. */
+async function assetsOfUnits(unitIds: string[]): Promise<Map<string, string>> {
+  if (unitIds.length === 0) return new Map();
+  const rows = (await AppDataSource.query(
+    `SELECT id, asset_id FROM content_units WHERE id IN (${unitIds.map(() => "?").join(",")})`,
+    unitIds,
+  )) as Array<{ id: string; asset_id: string }>;
+  return new Map(rows.map((r) => [r.id, r.asset_id]));
 }
 
 /** Minimal hit shapes for unit ids the FTS leg never saw. */
 async function hydrateSemantic(
   unitIds: string[],
   groups?: Set<string>,
+  readable?: Set<string>,
 ): Promise<SearchHit[]> {
   if (unitIds.length === 0) return [];
   const rows = (await AppDataSource.query(
@@ -133,6 +160,7 @@ async function hydrateSemantic(
   )) as Array<Record<string, unknown>>;
   return rows
     .filter((r) => groupOk(r.group_id as string | null, groups))
+    .filter((r) => !readable || readable.has(r.asset_id as string))
     .map((r) => ({
       unitId: r.unit_id as string,
       assetId: r.asset_id as string,
@@ -153,6 +181,16 @@ async function hydrateSemantic(
 function groupOk(groupId: string | null, groups?: Set<string>): boolean {
   if (!groups || groups.size === 0) return true;
   return groupId ? groups.has(groupId) : groups.has("__ungrouped__");
+}
+
+/** Readable asset set for the request's user (undefined = admin/all). */
+async function readableOf(
+  request: FastifyRequest,
+): Promise<Set<string> | undefined> {
+  const user = request.user;
+  if (!user || user.role === "super_admin") return undefined;
+  const readable = await readableAssetIds(user);
+  return readable === "all" ? undefined : readable;
 }
 
 // --- suggestions (as-you-type) ---
@@ -255,7 +293,11 @@ export function registerSearchRoutes(
     const groups = request.query.groups
       ? new Set(request.query.groups.split(",").filter(Boolean))
       : undefined;
-    const hits = await hybridSearch(worker, q, limit, mode, { scope, groups });
+    const hits = await hybridSearch(worker, q, limit, mode, {
+      scope,
+      groups,
+      readable: await readableOf(request),
+    });
     return { hits };
   });
 
@@ -267,7 +309,9 @@ export function registerSearchRoutes(
       if (q.length < 1)
         return { terms: [], hits: [] } satisfies SuggestResponse;
       const expr = prefixExpr(q);
-      const hits = expr ? await ftsSearch(expr, 20) : [];
+      const hits = expr
+        ? await ftsSearch(expr, 20, undefined, await readableOf(request))
+        : [];
       const terms = extractCompletions(
         q,
         hits.flatMap((h) => [

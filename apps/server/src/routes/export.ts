@@ -5,6 +5,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { AppDataSource } from "../db/data-source";
 import { Asset, Job } from "../db/entities";
 import { parseExportPayload } from "../queue/dispatcher";
+import { canRead } from "../auth/perm";
 
 /**
  * Export formats:
@@ -55,6 +56,9 @@ export async function createExportJob(
     for (const assetId of distinct) {
       const asset = await assetRepo.findOneBy({ id: assetId });
       if (!asset) return { error: `asset ${assetId} not found`, code: 404 };
+      if (!(await canRead(request.user!, assetId))) {
+        return { error: `no permission on asset ${assetId}`, code: 403 };
+      }
       if (
         asset.kind !== "presentation" &&
         asset.kind !== "pdf" &&
@@ -74,6 +78,9 @@ export async function createExportJob(
       }
       const asset = await assetRepo.findOneBy({ id: ref.assetId });
       if (!asset) return { error: `asset ${ref.assetId} not found`, code: 404 };
+      if (!(await canRead(request.user!, ref.assetId))) {
+        return { error: `no permission on asset ${ref.assetId}`, code: 403 };
+      }
     }
   }
   const user = (request as unknown as { user?: { id: string } }).user;

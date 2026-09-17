@@ -5,12 +5,16 @@ import Button from "@/components/ui/Button.vue";
 import { api, apiBlob } from "@/api/client";
 import { moveAsset, fetchGroups, type GroupNode } from "@/api/library";
 import PdfPreview from "@/components/PdfPreview.vue";
-import { ChevronRight } from "lucide-vue-next";
+import { ChevronRight, Shield } from "lucide-vue-next";
+import PermissionDialog from "@/components/PermissionDialog.vue";
+import { useAuthStore } from "@/stores/auth";
 import { useCartStore } from "@/stores/cart";
 
 const route = useRoute();
 const router = useRouter();
 const cart = useCartStore();
+const authStore = useAuthStore();
+const permOpen = ref(false);
 
 interface DetailAsset {
   id: string;
@@ -264,6 +268,15 @@ onMounted(() => {
             <a :href="previewUrl()" target="_blank">
               <Button size="sm" variant="outline">Download</Button>
             </a>
+            <Button
+              v-if="authStore.user?.role === 'super_admin'"
+              size="sm"
+              variant="outline"
+              title="Permissions"
+              @click="permOpen = true"
+            >
+              <Shield class="h-4 w-4" />
+            </Button>
           </div>
         </div>
 
@@ -422,6 +435,14 @@ onMounted(() => {
         </p>
       </div>
     </aside>
+
+    <PermissionDialog
+      v-if="permOpen && asset"
+      target-type="asset"
+      :target-id="String(route.params.id)"
+      :name="asset.path.split('/').pop() ?? 'file'"
+      @close="permOpen = false"
+    />
 
     <PdfPreview
       v-if="showPdf && asset"

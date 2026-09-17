@@ -15,6 +15,15 @@ export class Group {
   @Column({ name: "sort_order", type: "integer", nullable: false, default: 0 })
   sortOrder!: number;
 
+  /** `public` files/folders are readable by every signed-in user
+   *  (对外); `internal` needs an explicit ACL grant. */
+  @Column({
+    type: "text",
+    nullable: false,
+    default: "internal",
+  })
+  visibility!: "internal" | "public";
+
   @Column({
     name: "created_at",
     type: "datetime",

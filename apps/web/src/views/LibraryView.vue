@@ -1,4 +1,14 @@
 <script setup lang="ts">
+import { Shield } from "lucide-vue-next";
+import PermissionDialog from "@/components/PermissionDialog.vue";
+import { useAuthStore } from "@/stores/auth";
+
+const authStore = useAuthStore();
+const permTarget = ref<{
+  targetType: "group" | "asset";
+  targetId: string;
+  name: string;
+} | null>(null);
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import Button from "@/components/ui/Button.vue";
@@ -346,6 +356,20 @@ onMounted(() => {
           </button>
           <span class="ml-1 hidden shrink-0 gap-0.5 group-hover:flex">
             <button
+              v-if="authStore.user?.role === 'super_admin'"
+              class="px-1 text-xs text-muted-foreground hover:text-foreground"
+              title="Permissions"
+              @click.stop="
+                permTarget = {
+                  targetType: 'group',
+                  targetId: g.id,
+                  name: g.name,
+                }
+              "
+            >
+              <Shield class="h-3.5 w-3.5" />
+            </button>
+            <button
               class="px-1 text-xs text-muted-foreground hover:text-foreground"
               title="Rename"
               @click.stop="startRename(g)"
@@ -665,5 +689,13 @@ onMounted(() => {
         </Button>
       </div>
     </div>
+
+    <PermissionDialog
+      v-if="permTarget"
+      :target-type="permTarget.targetType"
+      :target-id="permTarget.targetId"
+      :name="permTarget.name"
+      @close="permTarget = null"
+    />
   </div>
 </template>
