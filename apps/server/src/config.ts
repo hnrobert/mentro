@@ -54,27 +54,54 @@ export function loadConfig(): Config {
 
 /** Single-instance advisory lock on the data dir; refuses to start when
  * another live owner holds it. Returns a release function. */
+/** Linux process start-time tick (field 22 of /proc/<pid>/stat) —
+ *  distinguishes "pid N alive" from "pid N alive but a DIFFERENT process"
+ *  (containers recycle small pids across restarts, which made the old
+ *  pid-only check refuse legitimate boots). Null off Linux. */
+function procStartTime(pid: number): string | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    // comm may contain spaces; fields resume after the last ')'.
+    const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
+    return afterComm.trim().split(/\s+/)[19] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function lockDataDir(dataDir: string): () => void {
   const lockPath = path.join(dataDir, ".lock");
+  const self = `${process.pid} ${procStartTime(process.pid) ?? ""}`;
   try {
-    fs.writeFileSync(lockPath, `${process.pid}\n`, { flag: "wx" });
+    fs.writeFileSync(lockPath, `${self}\n`, { flag: "wx" });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-      const holder = fs.readFileSync(lockPath, "utf8").trim();
+      const [holderPidRaw, holderStart] = fs
+        .readFileSync(lockPath, "utf8")
+        .trim()
+        .split(" ");
+      const holderPid = Number(holderPidRaw);
       let alive = false;
       try {
-        process.kill(Number(holder), 0);
+        process.kill(holderPid, 0);
         alive = true;
       } catch {
         alive = false;
       }
-      if (alive) {
+      // Same pid AND same kernel start time = same process; anything
+      // else is a stale lock from a previous boot.
+      const sameProcess =
+        alive &&
+        holderStart !== undefined &&
+        holderStart !== "" &&
+        procStartTime(holderPid) === holderStart;
+      if (sameProcess) {
         console.error(
-          `[mentro] data dir already in use by pid ${holder} — refusing to start`,
+          `[mentro] data dir already in use by pid ${holderPid} — refusing to start`,
         );
         process.exit(73);
       }
-      fs.writeFileSync(lockPath, `${process.pid}\n`);
+      fs.writeFileSync(lockPath, `${self}\n`);
     } else {
       throw err;
     }
