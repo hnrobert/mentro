@@ -62,6 +62,14 @@ impl Block {
     }
 }
 
+/** Raw fragment reference kept per line for table-column splitting. */
+#[derive(Clone)]
+struct FragRef {
+    left: f64,
+    right: f64,
+    text: String,
+}
+
 #[derive(Clone)]
 struct Line {
     text: String,
@@ -72,6 +80,7 @@ struct Line {
     size: f64,
     bold: bool,
     weight: usize,
+    frags: Vec<FragRef>,
 }
 
 impl Line {
@@ -292,6 +301,15 @@ fn group_fragments_to_lines(frags: Vec<Fragment>) -> Vec<Line> {
         }
         let bold = frags.iter().any(|f| f.bold);
         let weight: usize = frags.iter().map(|f| f.text.len()).sum();
+        let line_frags: Vec<FragRef> = frags
+            .iter()
+            .filter(|f| !f.text.trim().is_empty())
+            .map(|f| FragRef {
+                left: f.left,
+                right: f.left + f.width,
+                text: f.text.clone(),
+            })
+            .collect();
         Some(Line {
             text,
             left,
@@ -301,6 +319,7 @@ fn group_fragments_to_lines(frags: Vec<Fragment>) -> Vec<Line> {
             size,
             bold,
             weight,
+            frags: line_frags,
         })
     };
 
@@ -343,6 +362,9 @@ fn group_lines_to_blocks(lines: Vec<Line>) -> Vec<Block> {
     }
     let mut blocks: Vec<Block> = Vec::new();
     let mut current: Vec<Line> = vec![lines[0].clone()];
+    // Column grid carried from the previous table group: table rows
+    // whose cells stack single lines still align to the same grid.
+    let mut table_grid: Option<Vec<f64>> = None;
 
     for line in lines.into_iter().skip(1) {
         let prev = current.last().expect("non-empty");
@@ -354,18 +376,310 @@ fn group_lines_to_blocks(lines: Vec<Line>) -> Vec<Block> {
         if overlap >= BLOCK_MIN_OVERLAP && gap < BLOCK_MAX_GAP_LINES * avg_height {
             current.push(line);
         } else {
-            blocks.push(lines_to_block(&current));
+            let (emitted, grid) = emit_blocks(&current, table_grid.clone());
+            blocks.extend(emitted);
+            table_grid = grid;
             current = vec![line];
         }
     }
-    blocks.push(lines_to_block(&current));
+    let (emitted, _) = emit_blocks(&current, table_grid);
+    blocks.extend(emitted);
     blocks
+}
+
+/// Flush a line group: table rows interleave cells across columns, so a
+/// group with recurring x-structure splits into per-COLUMN blocks (each
+/// cell's wrapped lines read in order); plain paragraphs fall back to a
+/// single block.
+fn emit_blocks(lines: &[Line], inherited_grid: Option<Vec<f64>>) -> (Vec<Block>, Option<Vec<f64>>) {
+    if let Some((cols, starts)) = split_table_columns(lines) {
+        return (cols, Some(starts));
+    }
+    // Single-line (or detection-shy) group right after a table row:
+    // reuse the grid when this group's fragments align to it.
+    if let Some(starts) = inherited_grid
+        && starts.len() >= 2
+    {
+        // Same prose guard: lines must span >= 2 of the grid columns.
+        let spanning = lines
+            .iter()
+            .filter(|l| {
+                let mut cols = std::collections::HashSet::new();
+                for f in &l.frags {
+                    let mut col = 0;
+                    for (i, &st) in starts.iter().enumerate() {
+                        if f.left >= st - 3.0 {
+                            col = i;
+                        }
+                    }
+                    cols.insert(col);
+                }
+                cols.len() >= 2
+            })
+            .count();
+        if spanning * 10 >= lines.len() * 8 {
+            return (columns_from_starts(lines, &starts), Some(starts));
+        }
+    }
+    let fallback = lines_to_block(lines);
+    if is_symbol_only(&fallback.text) {
+        return (Vec::new(), None);
+    }
+    (vec![fallback], None)
+}
+
+/// Detect table-like column structure in a line group and produce one
+/// block per column, or None when the group looks like plain prose.
+///
+/// Tables: cell left edges recur at the same x across lines (grid), and
+/// distinct cells sit > ~1.6 glyph-widths apart. Prose: fragment lefts
+/// drift per line; the tight clustering below merges them into one span.
+fn split_table_columns(lines: &[Line]) -> Option<(Vec<Block>, Vec<f64>)> {
+    if lines.len() < 2 {
+        return None;
+    }
+    let frags: Vec<(usize, &FragRef)> = lines
+        .iter()
+        .enumerate()
+        .flat_map(|(li, l)| l.frags.iter().map(move |f| (li, f)))
+        .collect();
+    if frags.len() < 4 {
+        return None;
+    }
+    let modal_size = {
+        let mut best = (0usize, lines[0].size);
+        for l in lines {
+            if l.weight >= best.0 {
+                best = (l.weight, l.size);
+            }
+        }
+        best.1.max(4.0)
+    };
+
+    // 1. Cluster left edges on a tight grid tolerance.
+    const GRID_TOL: f64 = 3.0;
+    let mut lefts: Vec<f64> = frags.iter().map(|(_, f)| f.left).collect();
+    lefts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut clusters: Vec<(f64, f64, usize)> = Vec::new(); // (min, max, count)
+    let mut line_sets: Vec<std::collections::HashSet<usize>> = Vec::new();
+    for l in lefts {
+        match clusters.last_mut() {
+            Some((_, max, _)) if l - *max <= GRID_TOL => {
+                *max = l;
+                let i = clusters.len() - 1;
+                line_sets[i].insert(0); // placeholder, filled below
+            }
+            _ => {
+                clusters.push((l, l, 0));
+                line_sets.push(std::collections::HashSet::new());
+            }
+        }
+    }
+    // Recompute membership properly: fragment -> its cluster index.
+    let cluster_of = |left: f64| -> usize {
+        let mut idx = 0;
+        for (i, (min, max, _)) in clusters.iter().enumerate() {
+            if left >= *min - GRID_TOL && left <= *max + GRID_TOL {
+                idx = i;
+            }
+        }
+        idx
+    };
+    let mut member_lines: Vec<std::collections::HashSet<usize>> =
+        vec![std::collections::HashSet::new(); clusters.len()];
+    for (li, f) in &frags {
+        member_lines[cluster_of(f.left)].insert(*li);
+    }
+    // A cluster recurs when it draws from >= 2 different lines.
+    let recurring: Vec<usize> = (0..clusters.len())
+        .filter(|&i| member_lines[i].len() >= 2)
+        .collect();
+    if recurring.len() < 2 {
+        return None;
+    }
+
+    // 2. Merge adjacent recurring clusters closer than ~1.6 glyphs
+    //    (per-glyph positions inside one cell); keep the gaps between
+    //    merged groups as column boundaries.
+    let merge_gap = 1.6 * modal_size;
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for &ci in &recurring {
+        let push_new = match groups.last() {
+            Some(g) => {
+                let prev_end = clusters[*g.last().unwrap()].1;
+                clusters[ci].0 - prev_end > merge_gap
+            }
+            None => true,
+        };
+        if push_new {
+            groups.push(vec![ci]);
+        } else {
+            groups.last_mut().unwrap().push(ci);
+        }
+    }
+    // Real tables have >= 2 separated columns with stacked content.
+    if groups.len() < 2 {
+        return None;
+    }
+
+    // 3. Column start = leftmost cluster in each group.
+    let starts: Vec<f64> = groups
+        .iter()
+        .map(|g| clusters[*g.first().unwrap()].0)
+        .collect();
+    // Prose guard: a justified CJK paragraph also has grid-aligned left
+    // edges, but each LINE lives in one column; a table row has cells
+    // in several. Require most lines to span >= 2 columns.
+    let spanning = lines
+        .iter()
+        .filter(|l| {
+            let mut cols = std::collections::HashSet::new();
+            for f in &l.frags {
+                let mut col = 0;
+                for (i, &st) in starts.iter().enumerate() {
+                    if f.left >= st - GRID_TOL {
+                        col = i;
+                    }
+                }
+                cols.insert(col);
+            }
+            cols.len() >= 2
+        })
+        .count();
+    if spanning * 20 < lines.len() * 7 {
+        return None;
+    }
+    // Deep-cell check: a real table stacks several lines inside at
+    // least two columns. Figure label columns (scattered one-off x
+    // positions inside a prose group) never satisfy this.
+    let mut col_line_count = vec![0usize; starts.len()];
+    for l in lines {
+        let mut cols = std::collections::HashSet::new();
+        for f in &l.frags {
+            let mut col = 0;
+            for (i, &st) in starts.iter().enumerate() {
+                if f.left >= st - GRID_TOL {
+                    col = i;
+                }
+            }
+            cols.insert(col);
+        }
+        for c in cols {
+            col_line_count[c] += 1;
+        }
+    }
+    if col_line_count.iter().filter(|&&n| n >= 3).count() < 2 {
+        return None;
+    }
+    // Corridor check: each boundary between adjacent columns must be an
+    // empty vertical corridor — no fragment straddles it in any line.
+    // Justified prose's phantom "last-glyph column" and figure labels
+    // floating inside a text group both fail this; real table gutters
+    // pass.
+    for w in starts.windows(2) {
+        // Boundary sits in the ACTUAL gap between the columns' fragments
+        // (cell text may run close to the next cell; starts' midpoint
+        // would cut through it).
+        // Corridor = empty strip between the last fragment of the left
+        // column and the next column's start.
+        let prev_end = frags
+            .iter()
+            .filter(|(_, f)| f.left >= w[0] - GRID_TOL && f.right < w[1])
+            .map(|(_, f)| f.right)
+            .fold(w[0], f64::max);
+        if w[1] - prev_end < 1.0 {
+            return None; // no corridor: fragments reach into the next column
+        }
+        let boundary = (prev_end + w[1]) / 2.0;
+        let straddling = lines.iter().any(|l| {
+            l.frags
+                .iter()
+                .any(|f| f.left < boundary - 0.5 && f.right > boundary + 0.5)
+        });
+        if straddling {
+            return None;
+        }
+    }
+    let blocks = columns_from_starts(lines, &starts);
+    if blocks.len() < 2 {
+        return None;
+    }
+    Some((blocks, starts))
+}
+
+/// Assign fragments to column starts (last start at/before left) and
+/// build one block per column, cells read in (line, x) order.
+fn columns_from_starts(lines: &[Line], starts: &[f64]) -> Vec<Block> {
+    let frags: Vec<(usize, &FragRef)> = lines
+        .iter()
+        .enumerate()
+        .flat_map(|(li, l)| l.frags.iter().map(move |f| (li, f)))
+        .collect();
+    let modal_size = {
+        let mut best = (0usize, lines[0].size);
+        for l in lines {
+            if l.weight >= best.0 {
+                best = (l.weight, l.size);
+            }
+        }
+        best.1.max(4.0)
+    };
+    let assign = |left: f64| -> usize {
+        let mut col = 0;
+        for (i, &st) in starts.iter().enumerate() {
+            if left >= st - 3.0 {
+                col = i;
+            }
+        }
+        col
+    };
+    let mut cols: Vec<Vec<(usize, &FragRef)>> = vec![Vec::new(); starts.len()];
+    for (li, f) in &frags {
+        cols[assign(f.left)].push((*li, f));
+    }
+    cols.into_iter()
+        .filter(|c| !c.is_empty())
+        .map(|c| {
+            let text = normalize_glyph_spacing(&join_runs(
+                &c.iter().map(|(_, f)| f.text.as_str()).collect::<Vec<_>>(),
+            ));
+            let left = c.iter().map(|(_, f)| f.left).fold(f64::MAX, f64::min);
+            let right = c.iter().map(|(_, f)| f.right).fold(f64::MIN, f64::max);
+            let top = c
+                .iter()
+                .map(|(li, _)| lines[*li].top)
+                .fold(f64::MAX, f64::min);
+            let bottom = c
+                .iter()
+                .map(|(li, _)| lines[*li].bottom)
+                .fold(f64::MIN, f64::max);
+            Block {
+                text,
+                left,
+                top,
+                right,
+                bottom,
+                size: modal_size,
+                bold: lines.iter().any(|l| l.bold),
+                is_header: false,
+                is_footer: false,
+            }
+        })
+        .filter(|b| !b.text.trim().is_empty())
+        .collect()
 }
 
 fn horizontal_overlap(a: &Line, b: &Line) -> f64 {
     let overlap = (a.right.min(b.right) - a.left.max(b.left)).max(0.0);
     let min_w = a.width().min(b.width()).max(f64::EPSILON);
     overlap / min_w
+}
+
+/// Blocks made only of table check/cross marks carry no search value —
+/// the neighboring text columns already carry the semantics.
+fn is_symbol_only(text: &str) -> bool {
+    text.chars()
+        .all(|c| c.is_whitespace() || matches!(c, '√' | '×' | '✓' | '✗' | '·' | '—'))
 }
 
 /// Characters that never take a space on either side when two runs
