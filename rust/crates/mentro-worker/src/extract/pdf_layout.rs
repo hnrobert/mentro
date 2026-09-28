@@ -259,12 +259,9 @@ fn group_fragments_to_lines(frags: Vec<Fragment>) -> Vec<Line> {
                 .partial_cmp(&b.left)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        let text: String = frags
-            .iter()
-            .map(|f| f.text.trim())
-            .filter(|t| !t.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
+        let text = normalize_glyph_spacing(&join_runs(
+            &frags.iter().map(|f| f.text.as_str()).collect::<Vec<_>>(),
+        ));
         if text.is_empty() {
             return None;
         }
@@ -371,14 +368,101 @@ fn horizontal_overlap(a: &Line, b: &Line) -> f64 {
     overlap / min_w
 }
 
+/// Characters that never take a space on either side when two runs
+/// meet (CJK ideographs, kana, hangul, CJK punctuation, fullwidth
+/// forms). pdftohtml splits CJK lines into many tiny <text> runs; a
+/// blanket " " join turns 在线优化 into 在 线 优化.
+fn cjk_ish(c: char) -> bool {
+    matches!(c as u32,
+        0x2E80..=0x9FFF   // CJK radicals, punctuation, kana, ideographs
+        | 0xAC00..=0xD7AF  // hangul
+        | 0xF900..=0xFAFF  // compat ideographs
+        | 0xFF00..=0xFFEF  // fullwidth forms
+    ) || matches!(
+        c,
+        '\u{2014}' | '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}' | '\u{2026}'
+    )
+}
+
+/// Join text runs: a space only where a real word boundary exists.
+/// CJK-CJK boundaries join flush; everything else keeps the space.
+fn join_runs(parts: &[&str]) -> String {
+    let mut out = String::new();
+    let mut prev_ends_cjk = false;
+    for part in parts {
+        let p = part.trim();
+        if p.is_empty() {
+            continue;
+        }
+        if out.is_empty() {
+            out.push_str(p);
+        } else {
+            let next_starts_cjk = p.chars().next().map(cjk_ish).unwrap_or(false);
+            if !(prev_ends_cjk && next_starts_cjk) {
+                out.push(' ');
+            }
+            out.push_str(p);
+        }
+        prev_ends_cjk = out.chars().last().map(cjk_ish).unwrap_or(false);
+    }
+    out
+}
+
+/// LibreOffice-rendered PPTX->PDFs sometimes emit a space between EVERY
+/// CJK glyph inside a single pdftohtml run (义 典 型 问 题). Word-level
+/// spaces in keyword lists are legit and must survive (演化计算 运筹优化).
+/// Rule: a chain of >= 3 CJK chars separated only by whitespace is
+/// glyph spacing — join it flush; shorter chains are word boundaries.
+fn normalize_glyph_spacing(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0usize;
+    while i < chars.len() {
+        if !cjk_ish(chars[i]) {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        // Collect the maximal chain: CJK (ws CJK)*
+        let mut chain: Vec<char> = vec![chars[i]];
+        let mut gaps: Vec<String> = Vec::new(); // whitespace between members
+        let mut j = i + 1;
+        loop {
+            let mut k = j;
+            let mut ws = String::new();
+            while k < chars.len() && chars[k].is_whitespace() {
+                ws.push(chars[k]);
+                k += 1;
+            }
+            if ws.is_empty() || k >= chars.len() || !cjk_ish(chars[k]) {
+                break;
+            }
+            chain.push(chars[k]);
+            gaps.push(ws);
+            j = k + 1;
+        }
+        if chain.len() >= 3 {
+            // Glyph spacing: flush join.
+            for c in &chain {
+                out.push(*c);
+            }
+        } else {
+            // Word boundary: keep original spacing.
+            out.push(chain[0]);
+            for (idx, ws) in gaps.iter().enumerate() {
+                out.push_str(ws);
+                out.push(chain[idx + 1]);
+            }
+        }
+        i = j;
+    }
+    out
+}
+
 fn lines_to_block(lines: &[Line]) -> Block {
     let first = &lines[0];
     let mut block = Block {
-        text: lines
-            .iter()
-            .map(|l| l.text.trim())
-            .collect::<Vec<_>>()
-            .join(" "),
+        text: join_runs(&lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>()),
         left: f64::MAX,
         top: f64::MAX,
         right: f64::MIN,
@@ -624,5 +708,70 @@ fn merge_hyphenation(blocks: &mut Vec<Block>) {
         } else {
             i += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod cjk_join_tests {
+    use super::{cjk_ish, join_runs};
+
+    #[test]
+    fn joins_cjk_runs_without_spaces() {
+        assert_eq!(join_runs(&["在", "线", "优", "化"]), "在线优化");
+    }
+
+    #[test]
+    fn keeps_ascii_word_boundaries() {
+        assert_eq!(
+            join_runs(&["stochastic", "scenario", "tree"]),
+            "stochastic scenario tree"
+        );
+    }
+
+    #[test]
+    fn mixed_boundaries_keep_space() {
+        // ASCII-ASCII boundaries keep the legacy space.
+        assert_eq!(
+            join_runs(&["在线优化", "(", "online", ")", "调度"]),
+            "在线优化 ( online ) 调度"
+        );
+    }
+
+    #[test]
+    fn cjk_punctuation_binds() {
+        assert_eq!(join_runs(&["参数", "）", "数据"]), "参数）数据");
+    }
+
+    #[test]
+    fn recognizes_cjk_and_fullwidth() {
+        assert!(cjk_ish('港'));
+        assert!(cjk_ish('（'));
+        assert!(cjk_ish('，'));
+        assert!(!cjk_ish('a'));
+        assert!(!cjk_ish('('));
+    }
+
+    #[test]
+    fn strips_glyph_level_cjk_spacing() {
+        let out = super::normalize_glyph_spacing("在 线 优 化 问题");
+        assert_eq!(out, "在线优化问题");
+    }
+
+    #[test]
+    fn keeps_word_level_cjk_spacing() {
+        let out = super::normalize_glyph_spacing("演化计算 运筹优化 强化学习");
+        assert_eq!(out, "演化计算 运筹优化 强化学习");
+    }
+
+    #[test]
+    fn two_char_chain_is_word_boundary() {
+        let out = super::normalize_glyph_spacing("计算 优化");
+        assert_eq!(out, "计算 优化");
+    }
+
+    #[test]
+    fn mixed_line_keeps_ascii_words() {
+        let out = super::normalize_glyph_spacing("在 线 优化 (online) 调度");
+        assert_eq!(out, "在线优化 (online) 调度");
     }
 }

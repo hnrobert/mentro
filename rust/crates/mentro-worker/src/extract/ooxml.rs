@@ -24,6 +24,37 @@ fn read_entry(archive: &mut zip::ZipArchive<std::fs::File>, name: &str) -> Optio
 }
 
 /// Collect text inside `<a:t>...</a:t>` (PowerPoint runs).
+/// CJK boundary: no space between two CJK-ish runs (pdftohtml and
+/// OOXML both split CJK text into many runs; blanket spaces turn
+/// 在线优化 into 在 线 优化). Mirrors pdf_layout::cjk_ish/join_runs.
+fn cjk_ish(c: char) -> bool {
+    matches!(c as u32,
+        0x2E80..=0x9FFF
+        | 0xAC00..=0xD7AF
+        | 0xF900..=0xFAFF
+        | 0xFF00..=0xFFEF
+    ) || matches!(
+        c,
+        '\u{2014}' | '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}' | '\u{2026}'
+    )
+}
+
+/// Append `next` to `out` with a space only at real word boundaries.
+fn push_run(out: &mut String, next: &str) {
+    let n = next.trim();
+    if n.is_empty() {
+        return;
+    }
+    if !out.is_empty() {
+        let prev_cjk = out.chars().last().map(cjk_ish).unwrap_or(false);
+        let next_cjk = n.chars().next().map(cjk_ish).unwrap_or(false);
+        if !(out.ends_with(' ') || prev_cjk && next_cjk) {
+            out.push(' ');
+        }
+    }
+    out.push_str(n);
+}
+
 fn slide_text(xml: &str) -> String {
     let mut out = String::new();
     let mut reader = quick_xml::Reader::from_str(xml);
@@ -36,10 +67,7 @@ fn slide_text(xml: &str) -> String {
             }
             Ok(quick_xml::events::Event::Text(t)) if in_at => {
                 if let Ok(txt) = t.decode() {
-                    if !out.is_empty() {
-                        out.push(' ');
-                    }
-                    out.push_str(&txt);
+                    push_run(&mut out, &txt);
                 }
             }
             Ok(quick_xml::events::Event::End(e)) if e.name().as_ref() == b"a:t" => {
@@ -69,9 +97,12 @@ fn docx_text(xml: &str) -> String {
             },
             Ok(quick_xml::events::Event::Text(t)) if in_wt => {
                 if let Ok(txt) = t.decode() {
+                    // Runs within one paragraph join at word boundaries
+                    // only (CJK runs flush).
                     if in_para && !out.is_empty() && !out.ends_with('\n') {
-                        // runs within one paragraph join with space
-                        if !out.ends_with(' ') && !out.is_empty() {
+                        let prev_cjk = out.chars().last().map(cjk_ish).unwrap_or(false);
+                        let next_cjk = txt.chars().next().map(cjk_ish).unwrap_or(false);
+                        if !(out.ends_with(' ') || prev_cjk && next_cjk) {
                             out.push(' ');
                         }
                     }
