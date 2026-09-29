@@ -2,7 +2,7 @@
 //! to PDF over HTTP (`POST /forms/libreoffice/convert`). Container is
 //! lazily ensured by §7.6 rules (probe → start → create → health).
 
-use std::{path::Path, time::Duration};
+use std::{io::Read, io::Write, path::Path, time::Duration};
 
 use crate::{
     error::{WorkerError, WorkerResult},
@@ -130,8 +130,12 @@ pub fn ensure() -> Option<String> {
     None
 }
 
-/// Convert an Office document to PDF; returns the PDF bytes.
-pub fn convert_to_pdf(path: &Path) -> WorkerResult<Vec<u8>> {
+/// Convert an Office document to PDF, streaming the body straight into
+/// `dest` (temp file + rename — never a partial file at the final path).
+/// The response is capped at 2 GiB and validated: a body that does not
+/// end in a PDF %%EOF marker is rejected instead of cached, so a
+/// truncated conversion cannot poison the render cache.
+pub fn convert_to_pdf_into(path: &Path, dest: &Path) -> WorkerResult<()> {
     let Some(base) = ensure() else {
         return Err(WorkerError::new(
             EErrorCode::ToolMissing,
@@ -170,7 +174,7 @@ pub fn convert_to_pdf(path: &Path) -> WorkerResult<Vec<u8>> {
     };
 
     let resp = ureq::post(&format!("{base}/forms/libreoffice/convert"))
-        .timeout(Duration::from_secs(300))
+        .timeout(Duration::from_secs(600))
         .set(
             "Content-Type",
             &format!("multipart/form-data; boundary={boundary}"),
@@ -184,17 +188,54 @@ pub fn convert_to_pdf(path: &Path) -> WorkerResult<Vec<u8>> {
             true,
         ));
     }
-    let mut pdf = Vec::new();
-    use std::io::Read;
-    resp.into_reader()
-        .take(128 * 1024 * 1024)
-        .read_to_end(&mut pdf)
-        .map_err(|e| {
+
+    // Stream to a sibling temp file, then rename into place.
+    let tmp = dest.with_extension("part");
+    {
+        let file = std::fs::File::create(&tmp)
+            .map_err(|e| WorkerError::internal(format!("create {}: {e}", tmp.display())))?;
+        let mut writer = std::io::BufWriter::new(file);
+        let mut reader = resp.into_reader().take(2 * 1024 * 1024 * 1024);
+        let written = std::io::copy(&mut reader, &mut writer).map_err(|e| {
             WorkerError::new(
                 EErrorCode::ToolTimeout,
                 format!("gotenberg body: {e}"),
                 true,
             )
         })?;
-    Ok(pdf)
+        writer
+            .flush()
+            .map_err(|e| WorkerError::internal(format!("flush {}: {e}", tmp.display())))?;
+        if written == 0 {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(WorkerError::new(
+                EErrorCode::ToolNonZeroExit,
+                "gotenberg returned an empty body",
+                true,
+            ));
+        }
+    }
+
+    // Truncation guard: real PDFs end with %%EOF (allow a little
+    // trailing slack for linearized writers).
+    let tail_ok = std::fs::File::open(&tmp)
+        .and_then(|mut f| {
+            use std::io::{Seek, SeekFrom};
+            let len = f.seek(SeekFrom::End(0))?;
+            f.seek(SeekFrom::Start(len.saturating_sub(2048)))?;
+            let mut tail = Vec::new();
+            f.take(2048).read_to_end(&mut tail)?;
+            Ok(tail.windows(5).any(|w| w == b"%%EOF"))
+        })
+        .unwrap_or(false);
+    if !tail_ok {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(WorkerError::new(
+            EErrorCode::ToolNonZeroExit,
+            "gotenberg body is not a complete PDF (no %%EOF trailer)",
+            true,
+        ));
+    }
+    std::fs::rename(&tmp, dest)
+        .map_err(|e| WorkerError::internal(format!("rename to {}: {e}", dest.display())))
 }

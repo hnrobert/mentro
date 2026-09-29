@@ -34,14 +34,14 @@ pub(crate) fn ensure_pdf(path: &Path, asset_id: &str) -> Option<PathBuf> {
     // the original would drift page ordinals out of alignment with the
     // extracted units. Convert a normalized (un-hidden) copy instead.
     let sanitized = super::ooxml::unhidden_pptx_copy(path);
-    let converted = gotenberg::convert_to_pdf(sanitized.as_deref().unwrap_or(path)).ok();
+    let src = sanitized.as_deref().unwrap_or(path);
+    let converted = gotenberg::convert_to_pdf_into(src, &pdf_path).ok();
     if let Some(copy) = &sanitized {
         // Best-effort temp cleanup (also removes on failure paths).
         let _ = std::fs::remove_file(copy);
         let _ = std::fs::remove_dir(copy.parent().unwrap_or(Path::new("/tmp")));
     }
-    let bytes = converted?;
-    std::fs::write(&pdf_path, bytes).ok()?;
+    converted?;
     Some(pdf_path)
 }
 
