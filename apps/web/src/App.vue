@@ -21,6 +21,37 @@ const showSidebar = computed(() => route.name !== "login");
 const uploadOpen = ref(false);
 const cartOpen = ref(false);
 
+// --- sidebar width: drag the right edge, clamped, persisted ---
+const SIDEBAR_MIN = 160;
+const SIDEBAR_MAX = 420;
+const SIDEBAR_DEFAULT = 208; // w-52
+const resizingSidebar = ref(false);
+const sidebarWidth = ref(((): number => {
+  const stored = Number(localStorage.getItem("mentro:sidebar-w"));
+  return Number.isFinite(stored) && stored >= SIDEBAR_MIN && stored <= SIDEBAR_MAX
+    ? stored
+    : SIDEBAR_DEFAULT;
+})());
+
+function startSidebarResize(ev: MouseEvent): void {
+  ev.preventDefault();
+  resizingSidebar.value = true;
+  const move = (e: MouseEvent): void => {
+    sidebarWidth.value = Math.min(
+      SIDEBAR_MAX,
+      Math.max(SIDEBAR_MIN, Math.round(e.clientX)),
+    );
+  };
+  const up = (): void => {
+    resizingSidebar.value = false;
+    localStorage.setItem("mentro:sidebar-w", String(sidebarWidth.value));
+    window.removeEventListener("mousemove", move);
+    window.removeEventListener("mouseup", up);
+  };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+}
+
 async function refreshCount(): Promise<void> {
   try {
     const res = await api<{ total: number }>("/api/library?pageSize=1");
@@ -45,12 +76,19 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex h-screen overflow-hidden">
+  <div class="flex h-screen overflow-hidden" :class="{ 'select-none': resizingSidebar }">
     <!-- Sidebar -->
     <aside
       v-if="showSidebar"
-      class="flex w-52 shrink-0 flex-col border-r bg-muted/30"
+      class="relative flex shrink-0 flex-col border-r bg-muted/30"
+      :style="{ width: `${sidebarWidth}px` }"
     >
+      <!-- Width drag handle: straddles the right border -->
+      <div
+        class="absolute -right-1 top-0 z-40 h-full w-2 cursor-col-resize select-none hover:bg-foreground/20 active:bg-foreground/30"
+        title="Drag to resize"
+        @mousedown="startSidebarResize"
+      />
       <div class="px-4 pb-2 pt-5">
         <span class="text-lg font-semibold tracking-tight">Mentro</span>
       </div>

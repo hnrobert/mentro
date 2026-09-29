@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Shield } from "lucide-vue-next";
+import { Pencil, Plus, Shield, Trash2 } from "lucide-vue-next";
 import PermissionDialog from "@/components/PermissionDialog.vue";
 import { useAuthStore } from "@/stores/auth";
 
@@ -374,14 +374,14 @@ onMounted(() => {
               title="Rename"
               @click.stop="startRename(g)"
             >
-              E
+              <Pencil class="h-3.5 w-3.5" />
             </button>
             <button
               class="px-1 text-xs text-muted-foreground hover:text-destructive"
               title="Delete"
               @click.stop="removeGroup(g)"
             >
-              x
+              <Trash2 class="h-3.5 w-3.5" />
             </button>
           </span>
         </div>
@@ -408,9 +408,10 @@ onMounted(() => {
           size="sm"
           variant="outline"
           class="h-8 px-2 text-xs"
+          title="Add group"
           @click="addGroup"
         >
-          +
+          <Plus class="h-4 w-4" />
         </Button>
       </div>
     </div>
