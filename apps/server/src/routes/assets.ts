@@ -152,7 +152,9 @@ export function registerAssetRoutes(app: FastifyInstance, pool?: WorkerPool) {
         return reply.code(403).send({ error: "forbidden" });
       }
       const dataDir = process.env.MENTRO_DATA ?? "./data";
-      const pdf = path.join(dataDir, "render", `${asset.id}.pdf`);
+      // Keep in sync with the worker's render cache version
+      // (extract/render.rs RENDER_V): r2 un-hides slides pre-conversion.
+      const pdf = path.join(dataDir, "render", `${asset.id}.r2.pdf`);
       if (!fs.existsSync(pdf)) {
         return reply.code(404).send({ error: "not rendered" });
       }

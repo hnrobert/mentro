@@ -34,6 +34,7 @@ interface DetailUnit {
   title: string | null;
   text: string | null;
   thumbPath: string | null;
+  hidden?: boolean;
 }
 
 const asset = ref<DetailAsset | null>(null);
@@ -371,6 +372,13 @@ onMounted(() => {
                 @click.stop="toggleCart(u)"
               />
               <span class="shrink-0">{{ u.unitType }} {{ u.ordinal }}</span>
+              <span
+                v-if="u.hidden"
+                title="Hidden slide in the source deck (show=0)"
+                class="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+              >
+                hidden
+              </span>
               <span
                 v-if="u.title"
                 class="min-w-0 truncate font-normal text-muted-foreground"

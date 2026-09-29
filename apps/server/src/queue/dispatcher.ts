@@ -228,6 +228,7 @@ export class Dispatcher {
         startMs: bigint | number;
         endMs: bigint | number;
         thumbPath: string;
+        hidden: boolean;
       }>;
       thumbs?: string[];
     },
@@ -255,6 +256,7 @@ export class Dispatcher {
         endMs: Number(u.endMs) || null,
         thumbPath: i === 0 ? u.thumbPath || coverThumb : u.thumbPath || null,
         metaJson: null,
+        hidden: u.hidden === true,
       }));
       if (units.length > 0) await unitRepo.insert(units);
       const fileName = assetPath.split("/").pop() ?? "";
@@ -365,6 +367,7 @@ export class Dispatcher {
         endMs: w.end,
         thumbPath: null,
         metaJson: "transcript",
+        hidden: false,
       }));
       if (units.length > 0) await unitRepo.insert(units);
       const asset = await m.getRepository(Asset).findOneBy({ id: assetId });

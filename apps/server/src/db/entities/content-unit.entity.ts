@@ -37,6 +37,11 @@ export class ContentUnit {
   @Column({ name: "thumb_path", type: "text", nullable: true })
   thumbPath!: string | null;
 
+  /** Slide carries show="0" in the source deck (hidden but indexed and
+   *  rendered). Always false for non-presentation kinds. */
+  @Column({ type: "boolean", nullable: false, default: false })
+  hidden!: boolean;
+
   @Column({ name: "meta_json", type: "text", nullable: true })
   metaJson!: string | null;
 }

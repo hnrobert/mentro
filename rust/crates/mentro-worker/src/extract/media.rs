@@ -70,6 +70,7 @@ pub fn extract_image(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
             start_ms: 0,
             end_ms: 0,
             thumb_path: thumb.unwrap_or_default(),
+            hidden: false,
         }]);
     }
 
@@ -81,6 +82,7 @@ pub fn extract_image(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
         start_ms: 0,
         end_ms: 0,
         thumb_path: String::new(),
+        hidden: false,
     }])
 }
 
@@ -200,6 +202,7 @@ pub fn extract_av(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
         start_ms,
         end_ms,
         thumb_path: thumb.unwrap_or_default(),
+        hidden: false,
     }])
 }
 

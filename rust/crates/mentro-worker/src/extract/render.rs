@@ -14,16 +14,33 @@ fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var("MENTRO_DATA").unwrap_or_else(|_| "./data".into()))
 }
 
+/// Render cache layout version. Bump when office→PDF conversion
+/// semantics change so stale caches are ignored:
+/// v2 — hidden slides are un-hidden before conversion (old caches lack
+/// those pages). Keep the name in sync with the server's
+/// /api/assets/:id/rendered route.
+const RENDER_V: u8 = 2;
+
 /// Cached Office->PDF path, rendering on first request. Also feeds PDF
 /// export of office pages (export/pdf.rs).
 pub(crate) fn ensure_pdf(path: &Path, asset_id: &str) -> Option<PathBuf> {
     let render_dir = data_dir().join("render");
     std::fs::create_dir_all(&render_dir).ok()?;
-    let pdf_path = render_dir.join(format!("{asset_id}.pdf"));
+    let pdf_path = render_dir.join(format!("{asset_id}.r{RENDER_V}.pdf"));
     if pdf_path.exists() {
         return Some(pdf_path);
     }
-    let bytes = gotenberg::convert_to_pdf(path).ok()?;
+    // LibreOffice drops hidden slides when exporting to PDF; converting
+    // the original would drift page ordinals out of alignment with the
+    // extracted units. Convert a normalized (un-hidden) copy instead.
+    let sanitized = super::ooxml::unhidden_pptx_copy(path);
+    let converted = gotenberg::convert_to_pdf(sanitized.as_deref().unwrap_or(path)).ok();
+    if let Some(copy) = &sanitized {
+        // Best-effort temp cleanup (also removes on failure paths).
+        let _ = std::fs::remove_file(copy);
+        let _ = std::fs::remove_dir(copy.parent().unwrap_or(Path::new("/tmp")));
+    }
+    let bytes = converted?;
     std::fs::write(&pdf_path, bytes).ok()?;
     Some(pdf_path)
 }

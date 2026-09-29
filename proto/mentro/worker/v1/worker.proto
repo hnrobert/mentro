@@ -306,6 +306,7 @@ message CMsgContentUnit {
   int64 start_ms = 5; // av positioning
   int64 end_ms = 6;
   string thumb_path = 7;
+  bool hidden = 8; // slide carries show="0" (hidden in the source deck)
 }
 
 enum EUnitType {

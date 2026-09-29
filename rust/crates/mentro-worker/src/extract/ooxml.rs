@@ -2,7 +2,7 @@
 //! DOCX (paragraphs), XLSX (sheet names + shared strings). Pure
 //! zip + XML walking — no external tools, no rendering here.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 
 use crate::{
@@ -202,9 +202,10 @@ pub fn extract_pptx(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
     }
 
     // 3. Walk slides in order; pull slide + notes text. Hidden slides
-    //    (p:sld show="0") are skipped by LibreOffice when rendering the
-    //    preview PDF, so keeping them here misaligns ordinals with page
-    //    numbers — thumbnails and exports pick the wrong page.
+    //    (p:sld show="0") stay in the index — the render pipeline
+    //    un-hides them before LibreOffice conversion
+    //    (unhidden_pptx_copy), so ordinals follow the true sldIdLst
+    //    position and stay aligned with the rendered PDF's pages.
     let mut units = Vec::new();
     for (i, rid) in r_ids.iter().enumerate() {
         let target = target_by_id
@@ -213,9 +214,7 @@ pub fn extract_pptx(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
             .unwrap_or_else(|| format!("slides/slide{}.xml", i + 1));
         let entry = format!("ppt/{target}");
         let slide_xml = read_entry(&mut zip, &entry).unwrap_or_default();
-        if is_hidden_slide(&slide_xml) {
-            continue;
-        }
+        let hidden = is_hidden_slide(&slide_xml);
         let mut text = slide_text(&slide_xml);
 
         // Notes: slideN.xml rels point to ../notesSlides/notesSlideN.xml.
@@ -236,16 +235,15 @@ pub fn extract_pptx(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
 
         let title = title_of(&text);
         units.push(CMsgContentUnit {
-            // Visible position: hidden slides above were skipped, so
-            // the ordinal must follow the EMITTED count, matching the
-            // LibreOffice-rendered PDF's page numbering.
-            ordinal: (units.len() + 1) as i32,
+            // True sldIdLst position (see step 3 comment above).
+            ordinal: (i + 1) as i32,
             unit_type: EUnitType::Slide as i32,
             title,
             text,
             start_ms: 0,
             end_ms: 0,
             thumb_path: String::new(),
+            hidden,
         });
     }
     Ok(units)
@@ -254,8 +252,14 @@ pub fn extract_pptx(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
 /// A hidden slide carries show="0" on its root p:sld element.
 fn is_hidden_slide(slide_xml: &str) -> bool {
     // The root element and its attributes live at the very start; the
-    // declaration comes first, so scan events until p:sld opens.
-    let head = &slide_xml[..slide_xml.len().min(600)];
+    // declaration comes first, so scan events until p:sld opens. Cap
+    // the scan head, floor-ed to a char boundary (CJK slides can split
+    // a codepoint at any fixed byte offset).
+    let mut end = slide_xml.len().min(600);
+    while end > 0 && !slide_xml.is_char_boundary(end) {
+        end -= 1;
+    }
+    let head = &slide_xml[..end];
     let mut reader = quick_xml::Reader::from_str(head);
     loop {
         match reader.read_event() {
@@ -270,6 +274,88 @@ fn is_hidden_slide(slide_xml: &str) -> bool {
             _ => return false,
         }
     }
+}
+
+/// Strip `show="0"` from a slide's root element; None when absent.
+/// Only the root `<p:sld ...>` start tag is touched — the rest of the
+/// document is preserved verbatim.
+fn strip_root_show(slide_xml: &str) -> Option<String> {
+    let root = slide_xml.find("<p:sld")?;
+    let tag_end = root + slide_xml[root..].find('>')?;
+    let tag = &slide_xml[root..tag_end];
+    let patched = tag.replace(" show=\"0\"", "").replace(" show='0'", "");
+    if patched.len() == tag.len() {
+        return None;
+    }
+    Some(format!(
+        "{}{}{}",
+        &slide_xml[..root],
+        patched,
+        &slide_xml[tag_end..]
+    ))
+}
+
+static UNHIDE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Write a temp copy of a PPTX with hidden slides un-hidden (root
+/// `show="0"` stripped). LibreOffice drops hidden slides when exporting
+/// to PDF, so the office→PDF render must convert this normalized copy —
+/// otherwise rendered pages drift out of alignment with unit ordinals.
+/// Returns None when the deck has no hidden slides (render the
+/// original), or when it is not a readable pptx (non-zip, encrypted).
+pub fn unhidden_pptx_copy(path: &Path) -> Option<std::path::PathBuf> {
+    let mut zip = open_zip(path).ok()?;
+    let names: Vec<String> = zip.file_names().map(str::to_string).collect();
+    let is_slide =
+        |n: &str| n.starts_with("ppt/slides/") && n.ends_with(".xml") && !n.contains("_rels/");
+
+    // Cheap pre-pass: nothing to rewrite unless some slide is hidden.
+    if !names.iter().any(|n| is_slide(n)) {
+        return None;
+    }
+    let mut any_hidden = false;
+    for name in names.iter().filter(|n| is_slide(n)) {
+        if let Some(xml) = read_entry(&mut zip, name)
+            && is_hidden_slide(&xml)
+        {
+            any_hidden = true;
+            break;
+        }
+    }
+    if !any_hidden {
+        return None;
+    }
+
+    let seq = UNHIDE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("mentro-unhide-{}-{seq}", std::process::id()));
+    std::fs::create_dir_all(&dir).ok()?;
+    let tmp = dir.join("deck.pptx");
+    let fout = std::fs::File::create(&tmp).ok()?;
+    let mut writer = zip::ZipWriter::new(fout);
+    // Default compression is Deflated — LibreOffice accepts it fine.
+    let opts = zip::write::SimpleFileOptions::default();
+    for name in &names {
+        let Ok(mut entry) = zip.by_name(name) else {
+            continue;
+        };
+        if entry.is_dir() {
+            writer.add_directory(name, opts).ok()?;
+            continue;
+        }
+        if writer.start_file(name, opts).is_err() {
+            return None;
+        }
+        if is_slide(name) {
+            let mut xml = String::new();
+            entry.read_to_string(&mut xml).ok()?;
+            let patched = strip_root_show(&xml).unwrap_or(xml);
+            writer.write_all(patched.as_bytes()).ok()?;
+        } else {
+            std::io::copy(&mut entry, &mut writer).ok()?;
+        }
+    }
+    writer.finish().ok()?;
+    Some(tmp)
 }
 
 fn find_notes_target(rels_xml: &str) -> Option<String> {
@@ -314,6 +400,7 @@ pub fn extract_docx(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
         start_ms: 0,
         end_ms: 0,
         thumb_path: String::new(),
+        hidden: false,
     }])
 }
 
@@ -382,6 +469,7 @@ pub fn extract_xlsx(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
             start_ms: 0,
             end_ms: 0,
             thumb_path: String::new(),
+            hidden: false,
         });
     }
     Ok(units)
@@ -476,4 +564,133 @@ fn collect_shared_refs(xml: &str, strings: &[String]) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod hidden_slide_tests {
+    use super::*;
+
+    /// Minimal pptx: `hidden` marks which slides carry show="0".
+    fn min_pptx(hidden: &[bool]) -> std::path::PathBuf {
+        let tag: String = hidden.iter().map(|h| if *h { 'h' } else { 'v' }).collect();
+        let dir = std::env::temp_dir().join(format!("mentro-ooxml-test-{tag}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("deck.pptx");
+        let fout = std::fs::File::create(&path).unwrap();
+        let mut w = zip::ZipWriter::new(fout);
+        let opts = zip::write::SimpleFileOptions::default();
+
+        let n = hidden.len();
+        let ids: Vec<String> = (1..=n)
+            .map(|i| format!("<p:sldId id=\"{i}\" r:id=\"rId{i}\"/>"))
+            .collect();
+        w.start_file("ppt/presentation.xml", opts).unwrap();
+        write!(
+            w,
+            "<?xml?><p:presentation xmlns:r=\"x\">{}</p:presentation>",
+            ids.join("")
+        )
+        .unwrap();
+
+        let rels: Vec<String> = (1..=n)
+            .map(|i| {
+                format!(
+                    "<Relationship Id=\"rId{i}\" Type=\"slide\" Target=\"slides/slide{i}.xml\"/>"
+                )
+            })
+            .collect();
+        w.start_file("ppt/_rels/presentation.xml.rels", opts)
+            .unwrap();
+        write!(w, "<?xml?><Relationships>{}</Relationships>", rels.join("")).unwrap();
+
+        for (i, hid) in hidden.iter().enumerate() {
+            let sn = i + 1;
+            w.start_file(format!("ppt/slides/slide{sn}.xml"), opts)
+                .unwrap();
+            let show = if *hid { " show=\"0\"" } else { "" };
+            write!(
+                w,
+                "<?xml version=\"1.0\"?><p:sld{show}><p:txBody><a:t>slide {sn}</a:t></p:txBody></p:sld>"
+            )
+            .unwrap();
+        }
+        w.finish().unwrap();
+        path
+    }
+
+    #[test]
+    fn hidden_slides_stay_in_units() {
+        let units = extract_pptx(&min_pptx(&[false, true, false])).unwrap();
+        assert_eq!(units.len(), 3);
+        // Ordinals follow the true sldIdLst position, hidden included.
+        assert_eq!(
+            units.iter().map(|u| u.ordinal).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert!(!units[0].hidden);
+        assert!(units[1].hidden);
+        assert!(!units[2].hidden);
+        assert!(units[1].text.contains("slide 2"));
+    }
+
+    #[test]
+    fn unhidden_copy_strips_show_from_slides_only() {
+        let path = min_pptx(&[true]);
+        let copy = unhidden_pptx_copy(&path).unwrap();
+        let mut z = open_zip(&copy).unwrap();
+        let xml = read_entry(&mut z, "ppt/slides/slide1.xml").unwrap();
+        assert!(
+            xml.starts_with("<?xml version=\"1.0\"?><p:sld>"),
+            "root show gone: {xml}"
+        );
+        // Untouched sibling entry survives byte-for-byte semantics.
+        assert!(
+            read_entry(&mut z, "ppt/presentation.xml")
+                .unwrap()
+                .contains("rId1")
+        );
+        // The original deck is not modified.
+        let mut z0 = open_zip(&path).unwrap();
+        assert!(
+            read_entry(&mut z0, "ppt/slides/slide1.xml")
+                .unwrap()
+                .contains("show=\"0\"")
+        );
+    }
+
+    #[test]
+    fn multi_byte_char_at_scan_boundary_does_not_panic() {
+        // A CJK codepoint straddling byte 600 of the scan head must not
+        // panic the byte slice (regression: deck extraction crashed).
+        let mut xml = String::from("<?xml version=\"1.0\"?><p:sld show=\"0\"><a:t>");
+        while xml.len() < 598 {
+            xml.push('x');
+        }
+        xml.push('港'); // 3-byte codepoint spanning 598..=600
+        xml.push_str("</a:t></p:sld>");
+        assert!(is_hidden_slide(&xml));
+    }
+
+    #[test]
+    fn no_hidden_slides_means_no_copy() {
+        assert!(unhidden_pptx_copy(&min_pptx(&[false, false])).is_none());
+    }
+
+    #[test]
+    fn non_pptx_returns_none() {
+        // A docx-shaped zip has no slides: no rewrite.
+        let dir = std::env::temp_dir().join("mentro-ooxml-test-doc");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.docx");
+        let fout = std::fs::File::create(&path).unwrap();
+        let mut w = zip::ZipWriter::new(fout);
+        w.start_file(
+            "word/document.xml",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        write!(w, "<w:document/>").unwrap();
+        w.finish().unwrap();
+        assert!(unhidden_pptx_copy(&path).is_none());
+    }
 }
