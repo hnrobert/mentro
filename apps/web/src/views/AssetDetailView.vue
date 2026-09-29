@@ -126,12 +126,13 @@ function setActive(u: DetailUnit, opts: { updateRoute?: boolean } = {}): void {
 }
 
 /** Any click inside a unit row targets it — except cart checkbox
- *  (stop-propagated) and text selection inside the expanded body. */
+ *  (stop-propagated) and drag-selection of the expanded text. A plain
+ *  click in the text body still activates the page preview; selecting
+ *  text (non-empty selection) must not switch pages under the cursor. */
 function rowClick(u: DetailUnit, ev: MouseEvent): void {
   const target = ev.target as HTMLElement;
   if (target.closest('input[type="checkbox"]')) return;
   if (window.getSelection()?.toString()) return;
-  if (target.closest("pre")) return; // reading the expanded text
   setActive(u);
 }
 
