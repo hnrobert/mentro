@@ -28,6 +28,7 @@ import { registerWebStatic } from "./web-static";
 import { ensurePoolSource, mountEnvSources } from "./pool";
 import { registerUploadRoutes } from "./routes/upload";
 import { initSegmenter } from "./search/segment";
+import { ftsSelfHeal } from "./search/fts";
 import { WorkerPool, defaultPoolSize } from "./worker/pool";
 import { Dispatcher } from "./queue/dispatcher";
 import { clientCount, publish } from "./bus";
@@ -60,6 +61,9 @@ async function main(): Promise<void> {
 
   await initDataSource();
   await initSegmenter();
+  // Rowid-keyed FTS mirror: a content_units-rebuilding migration can
+  // silently break the linkage — verify (and rebuild) before serving.
+  await ftsSelfHeal();
 
   // Worker pool: N single-threaded worker processes (see serve.rs) — the
   // pool is what parallelizes extraction/transcription/embedding across

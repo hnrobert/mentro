@@ -47,16 +47,22 @@ export async function hybridSearch(
   opts: { scope?: Scope; groups?: Set<string>; readable?: Set<string> } = {},
 ): Promise<SearchHit[]> {
   const readable = opts.readable; // undefined = no ACL restriction (admin)
+  const filenameOnly = opts.scope === "filename";
   const [ftsHits, semantic] = await Promise.all([
     mode === "semantic"
       ? Promise.resolve([])
       : ftsSearch(
           scopedExpr(q, opts.scope ?? "everywhere"),
-          limit,
+          // Over-fetch for filename scope: per-file dedup below
+          // collapses dozens of unit rows into one hit each.
+          filenameOnly ? limit * 4 : limit,
           opts.groups,
           readable,
         ),
-    mode === "fts"
+    // Filename scope is FTS-only: unit embeddings carry no filename
+    // signal, so semantic hits would leak content matches straight
+    // through the filter.
+    mode === "fts" || filenameOnly
       ? Promise.resolve([])
       : semanticRanking(worker, q, limit, opts.groups, readable),
   ]);
@@ -101,7 +107,7 @@ export async function hybridSearch(
     }
   });
 
-  return [...merged.values()]
+  const ranked = [...merged.values()]
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map(({ hit, score, viaFts, viaSem }) => ({
@@ -109,6 +115,17 @@ export async function hybridSearch(
       score,
       source: viaFts && viaSem ? "hybrid" : viaFts ? "fts" : "semantic",
     }));
+  // Filename scope: every unit of a matching file matches (same
+  // file_name row) — collapse to one hit per file.
+  if (filenameOnly) {
+    const seen = new Set<string>();
+    return ranked.filter((h) => {
+      if (seen.has(h.assetId)) return false;
+      seen.add(h.assetId);
+      return true;
+    });
+  }
+  return ranked;
 }
 
 async function semanticRanking(

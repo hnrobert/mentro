@@ -28,7 +28,15 @@ export async function ftsReplaceUnits(
     await q.query(`DELETE FROM units_fts WHERE rowid = ?`, [rid]);
     await q.query(
       `INSERT INTO units_fts (rowid, title, text, file_name) VALUES (?, ?, ?, ?)`,
-      [rid, segment(unit.title ?? ""), segment(unit.text ?? ""), fileName],
+      // file_name is segmented too: the unicode61 tokenizer emits whole
+      // CJK runs as one token (集装箱码头.pptx), so raw names never match
+      // substring queries like 码头 in the filename-only scope.
+      [
+        rid,
+        segment(unit.title ?? ""),
+        segment(unit.text ?? ""),
+        segment(fileName),
+      ],
     );
   }
 }
@@ -44,6 +52,45 @@ export async function ftsDeleteAsset(
   for (const { rid } of rows) {
     await q.query(`DELETE FROM units_fts WHERE rowid = ?`, [rid]);
   }
+}
+
+/** The FTS mirror is keyed by content_units.rowid — a linkage that any
+ *  migration rebuilding content_units silently breaks (sqlite ALTER =
+ *  drop + copy + rename, which reassigns rowids; every search then
+ *  returns nothing). Verify on boot; rebuild the mirror when the join
+ *  count drifts. */
+export async function ftsSelfHeal(): Promise<void> {
+  const [{ units }] = (await AppDataSource.query(
+    `SELECT COUNT(*) AS units FROM content_units`,
+  )) as Array<{ units: number }>;
+  const [{ linked }] = (await AppDataSource.query(
+    `SELECT COUNT(*) AS linked FROM units_fts
+     JOIN content_units cu ON cu.rowid = units_fts.rowid`,
+  )) as Array<{ linked: number }>;
+  if (linked === units) return;
+
+  console.warn(
+    `[search] units_fts linkage broken (${linked}/${units} rows join) — rebuilding`,
+  );
+  await AppDataSource.query(`DELETE FROM units_fts`);
+  const rows = (await AppDataSource.query(
+    `SELECT cu.rowid AS rid, cu.title, cu.text,
+            COALESCE(a.path, '') AS path
+     FROM content_units cu JOIN assets a ON a.id = cu.asset_id`,
+  )) as Array<{
+    rid: number;
+    title: string | null;
+    text: string | null;
+    path: string;
+  }>;
+  for (const r of rows) {
+    const fileName = r.path.split("/").pop() ?? "";
+    await AppDataSource.query(
+      `INSERT INTO units_fts (rowid, title, text, file_name) VALUES (?, ?, ?, ?)`,
+      [r.rid, segment(r.title ?? ""), segment(r.text ?? ""), segment(fileName)],
+    );
+  }
+  console.log(`[search] rebuilt units_fts (${rows.length} units)`);
 }
 
 export interface SearchHit {
