@@ -201,7 +201,10 @@ pub fn extract_pptx(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
         }
     }
 
-    // 3. Walk slides in order; pull slide + notes text.
+    // 3. Walk slides in order; pull slide + notes text. Hidden slides
+    //    (p:sld show="0") are skipped by LibreOffice when rendering the
+    //    preview PDF, so keeping them here misaligns ordinals with page
+    //    numbers — thumbnails and exports pick the wrong page.
     let mut units = Vec::new();
     for (i, rid) in r_ids.iter().enumerate() {
         let target = target_by_id
@@ -210,6 +213,9 @@ pub fn extract_pptx(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
             .unwrap_or_else(|| format!("slides/slide{}.xml", i + 1));
         let entry = format!("ppt/{target}");
         let slide_xml = read_entry(&mut zip, &entry).unwrap_or_default();
+        if is_hidden_slide(&slide_xml) {
+            continue;
+        }
         let mut text = slide_text(&slide_xml);
 
         // Notes: slideN.xml rels point to ../notesSlides/notesSlideN.xml.
@@ -230,7 +236,10 @@ pub fn extract_pptx(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
 
         let title = title_of(&text);
         units.push(CMsgContentUnit {
-            ordinal: (i + 1) as i32,
+            // Visible position: hidden slides above were skipped, so
+            // the ordinal must follow the EMITTED count, matching the
+            // LibreOffice-rendered PDF's page numbering.
+            ordinal: (units.len() + 1) as i32,
             unit_type: EUnitType::Slide as i32,
             title,
             text,
@@ -240,6 +249,27 @@ pub fn extract_pptx(path: &Path) -> WorkerResult<Vec<CMsgContentUnit>> {
         });
     }
     Ok(units)
+}
+
+/// A hidden slide carries show="0" on its root p:sld element.
+fn is_hidden_slide(slide_xml: &str) -> bool {
+    // The root element and its attributes live at the very start; the
+    // declaration comes first, so scan events until p:sld opens.
+    let head = &slide_xml[..slide_xml.len().min(600)];
+    let mut reader = quick_xml::Reader::from_str(head);
+    loop {
+        match reader.read_event() {
+            Ok(quick_xml::events::Event::Decl(_)) | Ok(quick_xml::events::Event::Text(_)) => {}
+            Ok(quick_xml::events::Event::Start(ref e))
+            | Ok(quick_xml::events::Event::Empty(ref e)) => {
+                return e.name().as_ref() == b"p:sld"
+                    && e.attributes().flatten().any(|a| {
+                        a.key.as_ref() == b"show" && String::from_utf8_lossy(&a.value) == "0"
+                    });
+            }
+            _ => return false,
+        }
+    }
 }
 
 fn find_notes_target(rels_xml: &str) -> Option<String> {

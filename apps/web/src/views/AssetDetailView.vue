@@ -124,6 +124,16 @@ function setActive(u: DetailUnit, opts: { updateRoute?: boolean } = {}): void {
   }
 }
 
+/** Any click inside a unit row targets it — except cart checkbox
+ *  (stop-propagated) and text selection inside the expanded body. */
+function rowClick(u: DetailUnit, ev: MouseEvent): void {
+  const target = ev.target as HTMLElement;
+  if (target.closest('input[type="checkbox"]')) return;
+  if (window.getSelection()?.toString()) return;
+  if (target.closest("pre")) return; // reading the expanded text
+  setActive(u);
+}
+
 /** Open + scroll a unit into view (deep link / back navigation) and
  *  flash it so the landing spot is obvious. Double-RAF waits for the
  *  list to lay out before scrolling. */
@@ -345,6 +355,7 @@ onMounted(() => {
               cart.has(u.id) ? 'bg-accent/30' : '',
             ]"
             @toggle="($event.target as HTMLDetailsElement).open && setActive(u)"
+            @click="rowClick(u, $event)"
           >
             <summary
               class="flex cursor-pointer select-none list-none items-center gap-2 font-medium [&::-webkit-details-marker]:hidden"
