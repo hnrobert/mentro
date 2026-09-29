@@ -5,7 +5,12 @@ import Button from "@/components/ui/Button.vue";
 import { api, apiBlob } from "@/api/client";
 import { moveAsset, fetchGroups, type GroupNode } from "@/api/library";
 import PdfPreview from "@/components/PdfPreview.vue";
-import { ChevronRight, Shield } from "lucide-vue-next";
+import {
+  ChevronRight,
+  PanelRightClose,
+  PanelRightOpen,
+  Shield,
+} from "lucide-vue-next";
 import PermissionDialog from "@/components/PermissionDialog.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useCartStore } from "@/stores/cart";
@@ -196,6 +201,64 @@ function retryPreview(): void {
   void loadPreview(u);
 }
 
+// --- preview pane geometry: resizable + collapsible (xl+), stacked
+//     below the content on smaller screens ---
+
+const XL_QUERY = "(min-width: 1280px)"; // tailwind xl breakpoint
+const isXl = ref(
+  typeof window !== "undefined" && window.matchMedia(XL_QUERY).matches,
+);
+let xlMq: MediaQueryList | null = null;
+const onXlChange = (): void => {
+  isXl.value = xlMq?.matches ?? false;
+};
+
+const PREVIEW_MIN = 320;
+const previewWidth = ref(
+  ((): number => {
+    const stored = Number(localStorage.getItem("mentro:preview-w"));
+    const max = Math.max(PREVIEW_MIN, window.innerWidth - 560);
+    const fallback = Math.round(window.innerWidth * 0.46);
+    return Number.isFinite(stored)
+      ? Math.min(max, Math.max(PREVIEW_MIN, stored))
+      : Math.min(max, Math.max(PREVIEW_MIN, fallback));
+  })(),
+);
+const previewCollapsed = ref(
+  localStorage.getItem("mentro:preview-collapsed") === "1",
+);
+const resizingPreview = ref(false);
+
+function startPreviewResize(ev: MouseEvent): void {
+  ev.preventDefault();
+  resizingPreview.value = true;
+  const move = (e: MouseEvent): void => {
+    // The pane hugs the right edge (root padding ~24px): width follows
+    // the pointer from the right.
+    const max = Math.max(PREVIEW_MIN, window.innerWidth - 560);
+    previewWidth.value = Math.min(
+      max,
+      Math.max(PREVIEW_MIN, window.innerWidth - e.clientX - 24),
+    );
+  };
+  const up = (): void => {
+    resizingPreview.value = false;
+    localStorage.setItem("mentro:preview-w", String(previewWidth.value));
+    window.removeEventListener("mousemove", move);
+    window.removeEventListener("mouseup", up);
+  };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+}
+
+function togglePreview(): void {
+  previewCollapsed.value = !previewCollapsed.value;
+  localStorage.setItem(
+    "mentro:preview-collapsed",
+    previewCollapsed.value ? "1" : "0",
+  );
+}
+
 // --- cart: multi-select croppable pages (page/slide units) ---
 
 const selectable = (u: DetailUnit) =>
@@ -240,16 +303,24 @@ function toggleAll(): void {
 
 onUnmounted(() => {
   for (const url of previews.value.values()) URL.revokeObjectURL(url);
+  xlMq?.removeEventListener("change", onXlChange);
 });
 
 onMounted(() => {
+  xlMq = window.matchMedia(XL_QUERY);
+  isXl.value = xlMq.matches;
+  xlMq.addEventListener("change", onXlChange);
   void load();
   void loadGroups();
 });
 </script>
 
 <template>
-  <div class="flex items-start gap-6 p-6">
+  <!-- Column below xl (preview stacks under the list), row at xl+. -->
+  <div
+    class="flex flex-col items-start gap-6 p-6 xl:flex-row"
+    :class="{ 'select-none': resizingPreview }"
+  >
     <!-- Left: metadata + unit list -->
     <div class="mx-auto min-w-0 flex-1 max-lg:mx-auto lg:mx-0 lg:max-w-2xl">
       <p v-if="loading" class="text-sm text-muted-foreground">Loading…</p>
@@ -406,14 +477,24 @@ onMounted(() => {
       </style>
     </div>
 
-    <!-- Right: sticky page preview pane (fixed height — loading an image
-         never changes the page height). Hidden below lg. -->
+    <!-- Page preview. Below xl it stacks UNDER the list (phones); at xl+
+         it is the right pane: width draggable via its left edge,
+         collapsible to a slim strip. Fixed height either way — loading
+         an image never changes the page height. -->
     <aside
       v-if="renderable"
-      class="sticky top-0 hidden h-[calc(100vh-3rem)] w-[46%] shrink-0 flex-col overflow-hidden rounded-lg border bg-muted/20 xl:flex"
+      class="order-last sticky bottom-0 flex h-[42vh] w-full flex-col overflow-hidden rounded-lg border bg-background shadow-lg xl:sticky xl:bottom-auto xl:top-0 xl:h-[calc(100vh-3rem)] xl:shrink-0 xl:shadow-none"
+      :class="{ 'xl:hidden': previewCollapsed }"
+      :style="isXl ? { width: `${previewWidth}px` } : undefined"
     >
+      <!-- Width drag handle (xl+): straddles the pane's left border -->
       <div
-        class="flex shrink-0 items-baseline justify-between border-b px-3 py-2"
+        class="absolute -left-1 top-0 z-30 hidden h-full w-2 cursor-col-resize select-none hover:bg-foreground/20 active:bg-foreground/30 xl:block"
+        title="Drag to resize"
+        @mousedown="startPreviewResize"
+      />
+      <div
+        class="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2"
       >
         <span class="truncate text-sm font-medium">
           {{ active ? `${active.unitType} ${active.ordinal}` : "Preview" }}
@@ -421,8 +502,17 @@ onMounted(() => {
             {{ active.title.slice(0, 48) }}
           </span>
         </span>
-        <span class="shrink-0 text-xs text-muted-foreground">
-          {{ asset?.path.split("/").pop() }}
+        <span class="flex shrink-0 items-center gap-1">
+          <span class="max-w-[16rem] truncate text-xs text-muted-foreground">
+            {{ asset?.path.split("/").pop() }}
+          </span>
+          <button
+            class="hidden rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground xl:block"
+            title="Hide preview"
+            @click="togglePreview"
+          >
+            <PanelRightClose class="h-4 w-4" />
+          </button>
         </span>
       </div>
       <div
@@ -454,6 +544,26 @@ onMounted(() => {
           Expand a page to preview it
         </p>
       </div>
+    </aside>
+
+    <!-- Collapsed (xl+): slim strip at the far right to bring it back -->
+    <aside
+      v-if="renderable && previewCollapsed"
+      class="sticky top-0 hidden h-[calc(100vh-3rem)] w-10 shrink-0 flex-col items-center gap-3 rounded-lg border bg-muted/30 py-3 xl:flex"
+    >
+      <button
+        class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        title="Show preview"
+        @click="togglePreview"
+      >
+        <PanelRightOpen class="h-4 w-4" />
+      </button>
+      <span
+        class="select-none text-[10px] font-medium uppercase tracking-widest text-muted-foreground"
+        style="writing-mode: vertical-rl"
+      >
+        Preview
+      </span>
     </aside>
 
     <PermissionDialog
