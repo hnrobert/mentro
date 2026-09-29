@@ -14,6 +14,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { format } from "prettier";
 
 function resolveDb(): string {
   const arg = process.argv.find((a) => a.startsWith("--db="));
@@ -100,7 +101,10 @@ const DOWN: string[] = [
 ${render(downQueries)}
 ]
 `;
-  writeFileSync(file, content);
+  // Emit prettier-clean source: the raw template drifts from the
+  // repo format (quote style, trailing commas) and fails `pnpm lint`'s
+  // prettier --check gate.
+  writeFileSync(file, await format(content, { parser: "typescript" }));
   console.log(
     `[migration:generate] wrote ${file} (${upQueries.length} up / ${downQueries.length} down)`,
   );
