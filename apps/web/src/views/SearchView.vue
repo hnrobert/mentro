@@ -1,11 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
-import { api } from "@/api/client";
+import { assistantStream, api, type AssistantSource } from "@/api/client";
 import { fetchGroups, type GroupNode } from "@/api/library";
-import { ChevronDown, FileText, Library, Search, X } from "lucide-vue-next";
+import {
+  BookOpen,
+  ChevronDown,
+  FileText,
+  Library,
+  Search,
+  Sparkles,
+  Square,
+  X,
+} from "lucide-vue-next";
 
 /**
  * Server-side search, search-engine style: typing fetches SUGGESTIONS
@@ -180,6 +189,12 @@ function groupParams(): string {
   return `&groups=${encodeURIComponent([...selectedGroups.value].join(","))}`;
 }
 
+/** Snapshot of what produced the displayed hits — summarize must
+ *  describe THESE, not whatever the text box holds afterwards. */
+const executedQuery = ref("");
+const executedScope = ref<Scope>("everywhere");
+const executedGroups = ref("");
+
 async function submitSearch(): Promise<void> {
   const q = query.value.trim();
   if (!q) {
@@ -198,6 +213,11 @@ async function submitSearch(): Promise<void> {
       ...h,
       parts: parseSnippet(h.snippet),
     }));
+    executedQuery.value = q;
+    executedScope.value = scope.value;
+    executedGroups.value = groupFilterActive.value
+      ? [...selectedGroups.value].join(",")
+      : "";
   } catch (err) {
     error.value = String(err);
   } finally {
@@ -302,6 +322,157 @@ const groupFilterActive = computed(() => selectedGroups.value.size > 0);
 onMounted(() => {
   void loadGroups();
 });
+
+// --- AI assistant card (inline, streaming) ---------------------------------
+
+type AiMode = "summarize" | "ask" | "plan" | "deepread";
+const AI_MODES: Array<{ value: AiMode; label: string }> = [
+  { value: "summarize", label: "总结" },
+  { value: "ask", label: "问答" },
+  { value: "plan", label: "计划" },
+  { value: "deepread", label: "深读" },
+];
+
+const aiOn = ref(localStorage.getItem("mentro:ai-on") === "1");
+const aiMode = ref<AiMode>("summarize");
+const aiText = ref("");
+const aiSources = ref<AssistantSource[]>([]);
+const aiBusy = ref(false);
+const aiError = ref("");
+const askInput = ref("");
+const topicInput = ref("");
+/** deepread target, set by the 📖 button on a result row. */
+const aiTarget = ref<{ unitId: string; label: string } | null>(null);
+let aiAbort: AbortController | null = null;
+
+function toggleAi(): void {
+  aiOn.value = !aiOn.value;
+  localStorage.setItem("mentro:ai-on", aiOn.value ? "1" : "0");
+}
+
+function stopAi(): void {
+  aiAbort?.abort();
+}
+
+function switchAiMode(m: AiMode): void {
+  aiMode.value = m;
+  aiAbort?.abort(); // any in-flight generation belongs to the old mode
+  aiText.value = "";
+  aiSources.value = [];
+  aiError.value = "";
+}
+
+async function runAi(task: AiMode): Promise<void> {
+  const body: Record<string, unknown> = { task };
+  if (task === "summarize") {
+    // Summarize what is DISPLAYED: the query that produced the hits,
+    // not whatever is in the text box right now.
+    if (!executedQuery.value || hits.value.length === 0) return;
+    body.q = executedQuery.value;
+    body.scope = executedScope.value;
+    if (executedGroups.value) body.groups = executedGroups.value;
+  } else if (task === "ask") {
+    if (!askInput.value.trim()) return;
+    body.question = askInput.value.trim();
+  } else if (task === "plan") {
+    if (!topicInput.value.trim()) return;
+    body.topic = topicInput.value.trim();
+  } else {
+    if (!aiTarget.value) return;
+    body.unitId = aiTarget.value.unitId;
+  }
+  // Re-entrancy: kill any in-flight stream before starting the new one.
+  aiAbort?.abort();
+  aiText.value = "";
+  aiSources.value = [];
+  aiError.value = "";
+  aiBusy.value = true;
+  const myAbort = new AbortController();
+  aiAbort = myAbort;
+  try {
+    await assistantStream(
+      body,
+      {
+        onDelta: (t) => {
+          aiText.value += t;
+        },
+        onSources: (s) => {
+          aiSources.value = s;
+        },
+      },
+      myAbort.signal,
+    );
+  } catch (err) {
+    // A superseded/aborted run must not clobber the newer one's state.
+    if (!myAbort.signal.aborted) {
+      aiError.value = err instanceof Error ? err.message : String(err);
+    }
+  } finally {
+    if (aiAbort === myAbort) aiBusy.value = false;
+  }
+}
+
+onUnmounted(() => {
+  aiAbort?.abort();
+});
+
+/** Result-row 📖: deep-read this page (auto-runs — the click is intent). */
+function startDeepread(hit: ServerHit): void {
+  aiOn.value = true;
+  localStorage.setItem("mentro:ai-on", "1");
+  aiMode.value = "deepread";
+  aiTarget.value = {
+    unitId: hit.unitId,
+    label: `${hit.fileName} · ${hit.unitType} ${hit.ordinal}`,
+  };
+  void runAi("deepread");
+}
+
+/** Streamed text -> lines; `QUERY: x` lines become search buttons.
+ *  Tolerant of model drift: optional list marker, full-width colon,
+ *  any case (the prompt asks for `QUERY: 词` but nothing enforces it). */
+const aiLines = computed(() =>
+  aiText.value.split("\n").map((line) => {
+    const m = line.match(/^\s*(?:[-*·•]\s*)?QUERY\s*[:：]\s*(.+?)\s*$/i);
+    return m
+      ? { kind: "query" as const, q: m[1] }
+      : { kind: "text" as const, line };
+  }),
+);
+
+/** Split a text line into plain/citation【i】parts for click-to-jump. */
+function citeParts(line: string): Array<{ text: string; cite?: number }> {
+  const parts: Array<{ text: string; cite?: number }> = [];
+  const re = /【(\d+)】/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(line))) {
+    if (m.index > last) parts.push({ text: line.slice(last, m.index) });
+    parts.push({ text: m[0], cite: Number(m[1]) });
+    last = m.index + m[0].length;
+  }
+  if (last < line.length) parts.push({ text: line.slice(last) });
+  return parts;
+}
+
+function openSourceByIndex(i: number): void {
+  const s = aiSources.value.find((x) => x.i === i);
+  if (!s) return;
+  void router.push({
+    name: "asset-detail",
+    params: { id: s.assetId },
+    query:
+      s.unitType === "page" || s.unitType === "slide" || s.unitType === "sheet"
+        ? { page: String(s.ordinal) }
+        : {},
+  });
+}
+
+/** Plan suggestion clicked: run it as a real search. */
+function runSuggestedQuery(q: string): void {
+  query.value = q;
+  void submitSearch();
+}
 </script>
 
 <template>
@@ -395,24 +566,40 @@ onMounted(() => {
 
     <!-- Filters: available BEFORE searching (scope + type + groups) -->
     <div class="mb-6 flex flex-col items-center gap-3">
-      <div
-        class="inline-flex overflow-hidden rounded-full border bg-background text-xs"
-        role="group"
-        aria-label="Search scope"
-      >
-        <button
-          v-for="sc in SCOPES"
-          :key="sc.value"
-          class="px-3 py-1.5 transition-colors"
-          :class="
-            scope === sc.value
-              ? 'bg-primary text-primary-foreground'
-              : 'text-muted-foreground hover:bg-accent'
-          "
-          :aria-pressed="scope === sc.value"
-          @click="scope = sc.value"
+      <div class="flex items-center gap-3">
+        <div
+          class="inline-flex overflow-hidden rounded-full border bg-background text-xs"
+          role="group"
+          aria-label="Search scope"
         >
-          {{ sc.label }}
+          <button
+            v-for="sc in SCOPES"
+            :key="sc.value"
+            class="px-3 py-1.5 transition-colors"
+            :class="
+              scope === sc.value
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-accent'
+            "
+            :aria-pressed="scope === sc.value"
+            @click="scope = sc.value"
+          >
+            {{ sc.label }}
+          </button>
+        </div>
+        <button
+          class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors hover:bg-accent"
+          :class="
+            aiOn
+              ? 'border-primary bg-primary/10 font-medium text-foreground'
+              : 'text-muted-foreground'
+          "
+          :aria-pressed="aiOn"
+          title="AI 助手：总结 / 问答 / 研究计划 / 单页深读"
+          @click="toggleAi"
+        >
+          <Sparkles class="h-3.5 w-3.5" />
+          AI 助手
         </button>
       </div>
 
@@ -505,6 +692,173 @@ onMounted(() => {
       </div>
     </div>
 
+    <!-- AI assistant card -->
+    <div
+      v-if="aiOn"
+      class="mb-6 w-full rounded-xl border bg-card text-left shadow-sm"
+    >
+      <div class="flex items-center justify-between border-b px-3 py-1.5">
+        <div class="flex items-center gap-1">
+          <Sparkles class="mr-1 h-3.5 w-3.5 text-muted-foreground" />
+          <button
+            v-for="m in AI_MODES"
+            :key="m.value"
+            class="rounded-full px-2.5 py-1 text-xs transition-colors"
+            :class="
+              aiMode === m.value
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-accent'
+            "
+            @click="switchAiMode(m.value)"
+          >
+            {{ m.label }}
+          </button>
+        </div>
+        <button
+          v-if="aiBusy"
+          class="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          @click="stopAi"
+        >
+          <Square class="h-3 w-3" />
+          停止
+        </button>
+      </div>
+
+      <!-- mode inputs -->
+      <div class="border-b px-3 py-2">
+        <div v-if="aiMode === 'summarize'" class="flex items-center gap-2">
+          <Button
+            size="sm"
+            :disabled="aiBusy || !searched || hits.length === 0"
+            @click="runAi('summarize')"
+          >
+            总结「{{ executedQuery }}」的前 {{ Math.min(hits.length, 12) }} 条
+          </Button>
+          <span
+            v-if="!searched || hits.length === 0"
+            class="text-xs text-muted-foreground"
+          >
+            先执行一次搜索，再总结
+          </span>
+        </div>
+        <form
+          v-else-if="aiMode === 'ask'"
+          class="flex items-center gap-2"
+          @submit.prevent="runAi('ask')"
+        >
+          <input
+            v-model="askInput"
+            placeholder="就库内资料提问，如：堆场派位有哪些策略？"
+            class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+          />
+          <Button
+            size="sm"
+            type="submit"
+            :disabled="aiBusy || !askInput.trim()"
+          >
+            提问
+          </Button>
+        </form>
+        <form
+          v-else-if="aiMode === 'plan'"
+          class="flex items-center gap-2"
+          @submit.prevent="runAi('plan')"
+        >
+          <input
+            v-model="topicInput"
+            placeholder="输入研究主题，生成检索/阅读计划"
+            class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+          />
+          <Button
+            size="sm"
+            type="submit"
+            :disabled="aiBusy || !topicInput.trim()"
+          >
+            生成计划
+          </Button>
+        </form>
+        <div v-else class="flex items-center gap-2 text-xs">
+          <template v-if="aiTarget">
+            <span
+              class="truncate rounded bg-muted px-2 py-1 text-muted-foreground"
+            >
+              {{ aiTarget.label }}
+            </span>
+            <button
+              class="text-muted-foreground hover:underline"
+              :disabled="aiBusy"
+              @click="aiTarget && runAi('deepread')"
+            >
+              重新深读
+            </button>
+          </template>
+          <span v-else class="text-muted-foreground">
+            在下方搜索结果里点 📖 选择要深读的页
+          </span>
+        </div>
+      </div>
+
+      <!-- streamed output -->
+      <div
+        class="max-h-[28rem] overflow-y-auto px-4 py-3 text-sm leading-relaxed"
+      >
+        <p v-if="aiError" class="text-destructive">{{ aiError }}</p>
+        <p
+          v-else-if="aiBusy && !aiText"
+          class="animate-pulse text-muted-foreground"
+        >
+          检索库内资料并生成中…
+        </p>
+        <p v-else-if="!aiText" class="text-muted-foreground">
+          {{
+            AI_MODES.find((m) => m.value === aiMode)?.label
+          }}结果会显示在这里。
+        </p>
+        <template v-for="(l, li) in aiLines" v-else :key="li">
+          <div v-if="l.kind === 'query'" class="my-1">
+            <button
+              class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors hover:bg-accent"
+              title="以此检索词搜索"
+              @click="runSuggestedQuery(l.q)"
+            >
+              <Search class="h-3 w-3" />
+              {{ l.q }}
+            </button>
+          </div>
+          <p v-else class="whitespace-pre-wrap">
+            <template v-for="(part, pi) in citeParts(l.line)" :key="pi">
+              <button
+                v-if="part.cite"
+                class="mx-0.5 rounded bg-muted px-1 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                :title="aiSources.find((s) => s.i === part.cite)?.fileName"
+                @click="part.cite && openSourceByIndex(part.cite)"
+              >
+                {{ part.text }}
+              </button>
+              <template v-else>{{ part.text }}</template>
+            </template>
+          </p>
+        </template>
+
+        <!-- sources -->
+        <div
+          v-if="aiSources.length > 0 && !aiBusy"
+          class="mt-3 flex flex-wrap gap-1.5 border-t pt-2"
+        >
+          <button
+            v-for="s in aiSources"
+            :key="s.i"
+            class="inline-flex max-w-[16rem] items-center gap-1 rounded bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            :title="s.title ?? s.fileName"
+            @click="openSourceByIndex(s.i)"
+          >
+            【{{ s.i }}】{{ s.fileName }}
+            <span class="opacity-70">{{ s.unitType }} {{ s.ordinal }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
     <p v-if="error" class="text-center text-sm text-destructive">
       {{ error }}
     </p>
@@ -552,10 +906,19 @@ onMounted(() => {
       >
         <div class="mb-1 flex items-baseline justify-between gap-2">
           <span class="truncate text-sm font-medium">{{ hit.fileName }}</span>
-          <span
-            class="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
-          >
-            {{ hit.unitType }} {{ hit.ordinal }}
+          <span class="flex shrink-0 items-center gap-1">
+            <button
+              class="rounded p-1 text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+              title="AI 深读此页"
+              @click.stop="startDeepread(hit)"
+            >
+              <BookOpen class="h-3.5 w-3.5" />
+            </button>
+            <span
+              class="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+            >
+              {{ hit.unitType }} {{ hit.ordinal }}
+            </span>
           </span>
         </div>
         <p v-if="hit.title" class="truncate text-xs text-muted-foreground">

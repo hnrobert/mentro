@@ -19,6 +19,7 @@ import { onFsEvent } from "./fs-events";
 import { registerAssetRoutes } from "./routes/assets";
 import { registerLibraryRoutes } from "./routes/library";
 import { registerSearchRoutes } from "./routes/search";
+import { registerAssistantRoutes } from "./routes/assistant";
 import { registerJobRoutes } from "./routes/jobs";
 import { registerExportRoutes } from "./routes/export";
 import { registerAgentRoutes } from "./routes/agent";
@@ -174,6 +175,7 @@ async function main(): Promise<void> {
   registerAssetRoutes(app, pool);
   registerLibraryRoutes(app);
   registerSearchRoutes(app, worker);
+  registerAssistantRoutes(app, worker);
   registerJobRoutes(app);
   registerExportRoutes(app);
   registerAgentRoutes(app, worker);

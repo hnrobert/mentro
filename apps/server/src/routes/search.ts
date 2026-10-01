@@ -201,7 +201,7 @@ function groupOk(groupId: string | null, groups?: Set<string>): boolean {
 }
 
 /** Readable asset set for the request's user (undefined = admin/all). */
-async function readableOf(
+export async function readableOf(
   request: FastifyRequest,
 ): Promise<Set<string> | undefined> {
   const user = request.user;

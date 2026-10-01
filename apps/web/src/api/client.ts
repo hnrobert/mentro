@@ -203,3 +203,98 @@ export async function uploadFiles(files: File[]): Promise<UploadOutcome[]> {
   const body = (await res.json()) as { uploaded: UploadOutcome[] };
   return body.uploaded;
 }
+
+// --- AI assistant (SSE) ----------------------------------------------------
+
+export interface AssistantSource {
+  i: number;
+  unitId: string;
+  assetId: string;
+  ordinal: number;
+  unitType: string;
+  fileName: string;
+  title: string | null;
+}
+
+export interface AssistantHandlers {
+  onDelta: (text: string) => void;
+  onSources?: (sources: AssistantSource[]) => void;
+}
+
+/**
+ * POST /api/assistant and consume its SSE stream. Deltas and the
+ * terminal sources event go to the handlers; resolves at [DONE].
+ * Throws ApiError for non-2xx (e.g. 501 LLM not configured) or when the
+ * stream carries an {"error"} event.
+ */
+export async function assistantStream(
+  body: Record<string, unknown>,
+  handlers: AssistantHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  const doFetch = (): Promise<Response> => {
+    const auth = loadAuth();
+    return fetch("/api/assistant", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(auth?.accessToken
+          ? { authorization: `Bearer ${auth.accessToken}` }
+          : {}),
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+  };
+  let res = await doFetch();
+  // Same single refresh-on-401 retry as api()/apiBlob().
+  if (res.status === 401) {
+    if (await tryRefresh()) {
+      res = await doFetch();
+    } else {
+      clearAuth();
+      window.dispatchEvent(new CustomEvent("mentro:unauthorized"));
+    }
+  }
+  if (!res.ok || !res.body) {
+    let message = `HTTP ${res.status}`;
+    try {
+      const data = (await res.json()) as { error?: string; hint?: string };
+      if (data.error)
+        message = data.hint ? `${data.error}（${data.hint}）` : data.error;
+    } catch {
+      /* keep status line */
+    }
+    throw new ApiError(res.status, message);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (payload === "[DONE]") return;
+      try {
+        const ev = JSON.parse(payload) as {
+          delta?: string;
+          sources?: AssistantSource[];
+          error?: string;
+        };
+        if (ev.error) throw new ApiError(502, ev.error);
+        if (ev.delta) handlers.onDelta(ev.delta);
+        if (ev.sources && handlers.onSources) handlers.onSources(ev.sources);
+      } catch (err) {
+        if (err instanceof ApiError) throw err;
+        /* skip malformed line */
+      }
+    }
+  }
+}

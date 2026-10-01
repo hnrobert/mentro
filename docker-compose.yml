@@ -14,6 +14,11 @@ services:
       - MENTRO_DATA=/app/data
       - MENTRO_SOURCES=/sources
       # Sidecars run as sibling services: point the worker straight at
+      # them. AI assistant (search-page card) uses any OpenAI-compatible
+      # endpoint; unset -> the toggle reports "not configured" (501).
+      - MENTRO_LLM_BASE_URL=${MENTRO_LLM_BASE_URL:-}
+      - MENTRO_LLM_API_KEY=${MENTRO_LLM_API_KEY:-}
+      - MENTRO_LLM_MODEL=${MENTRO_LLM_MODEL:-}
       # them instead of docker-managed containers (no docker socket in
       # the app container).
       - MENTRO_OFFICE_URL=http://gotenberg:3000
