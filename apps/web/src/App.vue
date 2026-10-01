@@ -238,6 +238,7 @@ onUnmounted(() => {
         <div class="mb-2 flex gap-2" :class="collapsedRail ? 'flex-col' : ''">
           <button
             class="flex items-center justify-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent"
+            :class="collapsedRail ? '' : 'flex-1'"
             :title="collapsedRail ? 'Upload' : undefined"
             @click="uploadOpen = true"
           >

@@ -218,7 +218,9 @@ const previewWidth = ref(
   ((): number => {
     const stored = Number(localStorage.getItem("mentro:preview-w"));
     const max = Math.max(PREVIEW_MIN, window.innerWidth - 560);
-    const fallback = Math.round(window.innerWidth * 0.46);
+    // Default split: preview half the window, the page list the other
+    // half (clamped so the list keeps a usable minimum).
+    const fallback = Math.round(window.innerWidth * 0.5);
     return Number.isFinite(stored)
       ? Math.min(max, Math.max(PREVIEW_MIN, stored))
       : Math.min(max, Math.max(PREVIEW_MIN, fallback));
@@ -321,8 +323,12 @@ onMounted(() => {
     class="flex flex-col items-start gap-6 p-6 xl:flex-row"
     :class="{ 'select-none': resizingPreview }"
   >
-    <!-- Left: metadata + unit list -->
-    <div class="mx-auto min-w-0 flex-1 max-lg:mx-auto lg:mx-0 lg:max-w-2xl">
+    <!-- Left: metadata + unit list. With a preview (xl+) it fills the
+         left half; without one it stays a centered reading column. -->
+    <div
+      class="mx-auto min-w-0 flex-1 max-lg:mx-auto lg:mx-0 lg:max-w-2xl"
+      :class="renderable ? 'xl:max-w-none' : ''"
+    >
       <p v-if="loading" class="text-sm text-muted-foreground">Loading…</p>
       <p v-else-if="error" class="text-sm text-destructive">{{ error }}</p>
       <template v-else-if="asset">
