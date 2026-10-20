@@ -22,12 +22,23 @@ export function registerWebStatic(app: FastifyInstance): void {
     root: webDist,
     prefix: "/",
     wildcard: false,
+    // index.html must always revalidate — its asset hashes change every
+    // build, and a cached copy pins the OLD bundle forever. Hashed
+    // /assets/* files are content-addressed, so they cache immutably.
+    setHeaders: (reply, filePath) => {
+      if (filePath.endsWith("index.html")) {
+        reply.header("cache-control", "no-cache");
+      } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        reply.header("cache-control", "public, max-age=31536000, immutable");
+      }
+    },
   });
   // SPA fallback: unknown non-API routes get index.html (history mode).
   app.setNotFoundHandler((request, reply) => {
     if (request.url.startsWith("/api/") || request.url.startsWith("/mcp")) {
       return reply.code(404).send({ error: "not found" });
     }
+    reply.header("cache-control", "no-cache");
     return reply.sendFile("index.html");
   });
 }
