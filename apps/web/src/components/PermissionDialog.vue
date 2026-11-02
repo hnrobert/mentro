@@ -220,7 +220,7 @@ onMounted(() => void load());
             class="mt-2 inline-flex overflow-hidden rounded-full border text-xs"
           >
             <button
-              class="px-3 py-1 transition-colors"
+              class="inline-flex items-center px-3 py-1 transition-colors"
               :class="
                 visibility === 'internal'
                   ? 'bg-primary text-primary-foreground'
@@ -229,11 +229,11 @@ onMounted(() => void load());
               :disabled="busy"
               @click="setVisibility('internal')"
             >
-              <Shield class="mr-1 inline h-3 w-3" />
+              <Shield class="mr-1 h-3 w-3 shrink-0" />
               Internal
             </button>
             <button
-              class="border-l px-3 py-1 transition-colors"
+              class="inline-flex items-center border-l px-3 py-1 transition-colors"
               :class="
                 visibility === 'public'
                   ? 'bg-primary text-primary-foreground'
@@ -242,7 +242,7 @@ onMounted(() => void load());
               :disabled="busy"
               @click="setVisibility('public')"
             >
-              <ShieldCheck class="mr-1 inline h-3 w-3" />
+              <ShieldCheck class="mr-1 h-3 w-3 shrink-0" />
               Public (对外)
             </button>
           </div>
