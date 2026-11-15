@@ -318,9 +318,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <!-- Column below xl (preview stacks under the list), row at xl+. -->
+  <!-- Column below xl (preview stacks under the list), row at xl+.
+       items-stretch matters in column mode: with items-start the left
+       column shrink-wraps to content (max-content of the widest card)
+       and overflows phones; at xl the row mode wants items-start. -->
   <div
-    class="flex flex-col items-start gap-6 p-4 sm:p-6 xl:flex-row"
+    class="flex flex-col items-stretch gap-6 p-4 sm:p-6 xl:flex-row xl:items-start"
     :class="{ 'select-none': resizingPreview }"
   >
     <!-- Left: metadata + unit list. With a preview (xl+) it fills the
