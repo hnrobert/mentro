@@ -320,7 +320,7 @@ onMounted(() => {
 <template>
   <!-- Column below xl (preview stacks under the list), row at xl+. -->
   <div
-    class="flex flex-col items-start gap-6 p-6 xl:flex-row"
+    class="flex flex-col items-start gap-6 p-4 sm:p-6 xl:flex-row"
     :class="{ 'select-none': resizingPreview }"
   >
     <!-- Left: metadata + unit list. With a preview (xl+) it fills the
@@ -332,13 +332,15 @@ onMounted(() => {
       <p v-if="loading" class="text-sm text-muted-foreground">Loading…</p>
       <p v-else-if="error" class="text-sm text-destructive">{{ error }}</p>
       <template v-else-if="asset">
-        <!-- Header -->
-        <div class="mb-4 flex items-start justify-between gap-4">
+        <!-- Header (wraps on phones: title above, actions below) -->
+        <div
+          class="mb-4 flex flex-wrap items-start justify-between gap-x-4 gap-y-2"
+        >
           <div class="min-w-0">
             <h1 class="truncate text-xl font-semibold tracking-tight">
               {{ asset.path.split("/").pop() }}
             </h1>
-            <p class="mt-1 text-xs text-muted-foreground">
+            <p class="mt-1 break-all text-xs text-muted-foreground">
               {{ asset.path }}
             </p>
           </div>
@@ -369,21 +371,23 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- Metadata -->
-        <div class="mb-6 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
-          <div class="rounded-lg border p-3">
+        <!-- Metadata (single column on phones, cards break long values) -->
+        <div
+          class="mb-6 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3"
+        >
+          <div class="min-w-0 break-words rounded-lg border p-3">
             <p class="text-xs text-muted-foreground">Type</p>
             <p class="mt-1 font-medium">{{ asset.kind }}</p>
           </div>
-          <div class="rounded-lg border p-3">
+          <div class="min-w-0 break-words rounded-lg border p-3">
             <p class="text-xs text-muted-foreground">Size</p>
             <p class="mt-1 font-medium">{{ fmtSize(asset.sizeBytes) }}</p>
           </div>
-          <div class="rounded-lg border p-3">
+          <div class="min-w-0 break-words rounded-lg border p-3">
             <p class="text-xs text-muted-foreground">Index Status</p>
             <p class="mt-1 font-medium">{{ asset.extractionStatus }}</p>
           </div>
-          <div class="rounded-lg border p-3 sm:col-span-2">
+          <div class="min-w-0 rounded-lg border p-3 sm:col-span-2">
             <p class="text-xs text-muted-foreground">Group</p>
             <select
               class="mt-1 h-8 w-full rounded border border-input bg-background px-2 text-sm"
@@ -396,7 +400,7 @@ onMounted(() => {
               </option>
             </select>
           </div>
-          <div class="rounded-lg border p-3">
+          <div class="min-w-0 break-words rounded-lg border p-3">
             <p class="text-xs text-muted-foreground">Added</p>
             <p class="mt-1 font-medium">
               {{

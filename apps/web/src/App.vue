@@ -143,7 +143,7 @@ onUnmounted(() => {
     <!-- Sidebar: overlay drawer below lg, resizable/collapsible at lg+ -->
     <aside
       v-if="showSidebar"
-      class="fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col border-r bg-muted/30 shadow-xl transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0 lg:shadow-none"
+      class="fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col border-r bg-background shadow-xl transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0 lg:bg-muted/30 lg:shadow-none"
       :class="mobileNavOpen ? 'translate-x-0' : '-translate-x-full'"
       :style="
         isLg ? { width: `${collapsedRail ? 56 : sidebarWidth}px` } : undefined
@@ -293,7 +293,7 @@ onUnmounted(() => {
           Mentro
         </button>
       </div>
-      <div class="min-h-0 flex-1 overflow-y-auto">
+      <div class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         <RouterView @library-changed="refreshCount" />
       </div>
     </main>
