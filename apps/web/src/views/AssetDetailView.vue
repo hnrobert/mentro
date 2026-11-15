@@ -497,7 +497,7 @@ onMounted(() => {
          an image never changes the page height. -->
     <aside
       v-if="renderable"
-      class="order-last sticky bottom-0 flex h-[42vh] w-full flex-col overflow-hidden rounded-lg border bg-background shadow-lg xl:sticky xl:bottom-auto xl:top-0 xl:h-[calc(100vh-3rem)] xl:shrink-0 xl:shadow-none"
+      class="order-last sticky bottom-0 flex h-[42vh] w-full flex-col overflow-hidden rounded-lg border bg-background shadow-lg xl:sticky xl:bottom-auto xl:top-6 xl:h-[calc(100vh-3rem)] xl:shrink-0 xl:shadow-none"
       :class="{ 'xl:hidden': previewCollapsed }"
       :style="isXl ? { width: `${previewWidth}px` } : undefined"
     >
@@ -563,7 +563,7 @@ onMounted(() => {
     <!-- Collapsed (xl+): slim strip at the far right to bring it back -->
     <aside
       v-if="renderable && previewCollapsed"
-      class="sticky top-0 hidden h-[calc(100vh-3rem)] w-10 shrink-0 flex-col items-center gap-3 rounded-lg border bg-muted/30 py-3 xl:flex"
+      class="sticky top-0 hidden h-[calc(100vh-3rem)] w-10 shrink-0 flex-col items-center gap-3 rounded-lg border bg-muted/30 py-3 xl:top-6 xl:flex"
     >
       <button
         class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
