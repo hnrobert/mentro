@@ -132,7 +132,9 @@ async function prepareSummarize(
       },
     ],
     sources: sourcesOf(hits),
-    maxTokens: 800,
+    // Thinking-model budget: glm-5.3-flash emits reasoning_content
+    // first — the visible answer needs headroom after it.
+    maxTokens: 4000,
   };
 }
 
@@ -160,7 +162,7 @@ async function prepareAsk(
       },
     ],
     sources: sourcesOf(hits),
-    maxTokens: 900,
+    maxTokens: 4000,
   };
 }
 
@@ -192,7 +194,7 @@ async function preparePlan(
       },
     ],
     sources: sourcesOf(hits),
-    maxTokens: 1000,
+    maxTokens: 4000,
   };
 }
 
@@ -257,7 +259,7 @@ async function prepareDeepread(
       fileName,
       title: u.title,
     })),
-    maxTokens: 1000,
+    maxTokens: 4000,
   };
 }
 
