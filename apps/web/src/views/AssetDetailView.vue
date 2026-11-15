@@ -326,11 +326,12 @@ onMounted(() => {
     class="flex flex-col items-stretch gap-6 p-4 sm:p-6 xl:flex-row xl:items-start"
     :class="{ 'select-none': resizingPreview }"
   >
-    <!-- Left: metadata + unit list. With a preview (xl+) it fills the
-         left half; without one it stays a centered reading column. -->
+    <!-- Left: metadata + unit list. w-full is load-bearing on phones:
+         auto margins (mx-auto) would defeat items-stretch and shrink the
+         column back to max-content width, overflowing the screen. -->
     <div
-      class="mx-auto min-w-0 flex-1 max-lg:mx-auto lg:mx-0 lg:max-w-2xl"
-      :class="renderable ? 'xl:max-w-none' : ''"
+      class="w-full min-w-0 flex-1 lg:mx-auto lg:max-w-2xl"
+      :class="renderable ? 'xl:mx-0 xl:max-w-none' : ''"
     >
       <p v-if="loading" class="text-sm text-muted-foreground">Loading…</p>
       <p v-else-if="error" class="text-sm text-destructive">{{ error }}</p>
