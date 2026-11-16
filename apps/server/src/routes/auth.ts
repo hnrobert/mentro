@@ -2,7 +2,7 @@
  *  the auth guard stay here (HTTP policy, not domain logic). */
 
 import type { FastifyInstance } from "fastify";
-import { authGuard } from "./guards";
+import { authGuard } from "../auth/guards";
 import {
   changePassword,
   login,

@@ -12,8 +12,8 @@ import {
 } from "./db/data-source";
 import { Asset, Job, Source } from "./db/entities";
 import { authGuard } from "./auth/guards";
-import { registerAuthRoutes } from "./auth/routes";
-import { registerAdminRoutes } from "./admin/routes";
+import { registerAuthRoutes } from "./routes/auth";
+import { registerAdminRoutes } from "./routes/admin";
 import { registerSourceRoutes } from "./routes/sources";
 import { onFsEvent } from "./fs-events";
 import { registerAssetRoutes } from "./routes/assets";
