@@ -17,7 +17,7 @@
 
 import { AppDataSource } from "../db/data-source";
 import { Asset, Group, Permission, UserGroupMember } from "../db/entities";
-import type { AuthUser } from "./tokens";
+import type { AuthUser } from "../auth/tokens";
 
 export type Readable = "all" | Set<string>;
 

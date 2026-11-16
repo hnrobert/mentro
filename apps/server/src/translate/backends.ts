@@ -9,7 +9,7 @@ import {
   TranslateLlmSchema,
 } from "@mentro/protocol";
 import { translateLlmConfig } from "../llm";
-import type { Settings } from "../settings";
+import type { Settings } from "../services/settings.service";
 
 /** Resolve the ordered backend chain from settings + env. Unconfigured
  *  members are skipped. Each entry carries the proto oneof value and

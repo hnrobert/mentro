@@ -1,13 +1,16 @@
-import { ulid } from "ulid";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { AppDataSource } from "./db/data-source";
-import { Asset, ContentUnit, Job } from "./db/entities";
 import { authGuard } from "./auth/guards";
 import { countEmbeddings } from "./search/embeddings";
-import { createExportJob } from "./routes/export";
-import { hybridSearch } from "./routes/search";
+import { createExportJob } from "./services/export.service";
+import { hybridSearch } from "./services/search.service";
+import {
+  agentAssetOverview,
+  agentContext,
+  agentTranscribe,
+  agentUnit,
+} from "./services/agent.service";
 import type { WorkerClient } from "./worker/client";
-import { canRead } from "./auth/perm";
 
 /**
  * MCP (Model Context Protocol) endpoint — the Agent Tool API exposed in
@@ -120,34 +123,23 @@ function buildTools(worker: WorkerClient): ToolDef[] {
         required: ["assetId"],
       },
       handler: async (args, request) => {
-        const asset = await AppDataSource.getRepository(Asset).findOneBy({
-          id: str(args, "assetId"),
-        });
-        if (!asset) return { error: "asset not found" };
-        if (!(await canRead(request.user!, asset.id))) {
-          return { error: "forbidden" };
+        try {
+          const { asset, units } = await agentAssetOverview(
+            request.user!,
+            str(args, "assetId"),
+          );
+          return {
+            asset: {
+              id: asset.id,
+              path: asset.path,
+              kind: asset.kind,
+              sizeBytes: asset.sizeBytes,
+            },
+            units,
+          };
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : "failed" };
         }
-        const units = await AppDataSource.getRepository(ContentUnit).find({
-          where: { assetId: asset.id },
-          order: { ordinal: "ASC" },
-        });
-        return {
-          asset: {
-            id: asset.id,
-            path: asset.path,
-            kind: asset.kind,
-            sizeBytes: asset.sizeBytes,
-          },
-          units: units.map((u) => ({
-            unitId: u.id,
-            ordinal: u.ordinal,
-            unitType: u.unitType,
-            title: u.title,
-            startMs: u.startMs,
-            endMs: u.endMs,
-            textPreview: (u.text ?? "").slice(0, 300),
-          })),
-        };
       },
     },
     {
@@ -160,18 +152,16 @@ function buildTools(worker: WorkerClient): ToolDef[] {
         required: ["unitId"],
       },
       handler: async (args, request) => {
-        const unit = await AppDataSource.getRepository(ContentUnit).findOneBy({
-          id: str(args, "unitId"),
-        });
-        if (!unit) return { error: "unit not found" };
-        if (!(await canRead(request.user!, unit.assetId))) {
-          return { error: "forbidden" };
+        try {
+          const { unit } = await agentUnit(request.user!, str(args, "unitId"));
+          return {
+            unit,
+            fileUrl: `/api/assets/${unit.assetId}/file`,
+            thumbnailUrl: unit.thumbPath ? `/api/thumbs/${unit.id}` : null,
+          };
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : "failed" };
         }
-        return {
-          unit,
-          fileUrl: `/api/assets/${unit.assetId}/file`,
-          thumbnailUrl: unit.thumbPath ? `/api/thumbs/${unit.id}` : null,
-        };
       },
     },
     {
@@ -188,26 +178,18 @@ function buildTools(worker: WorkerClient): ToolDef[] {
         required: ["unitId"],
       },
       handler: async (args, request) => {
-        const unit = await AppDataSource.getRepository(ContentUnit).findOneBy({
-          id: str(args, "unitId"),
-        });
-        if (!unit) return { error: "unit not found" };
-        if (!(await canRead(request.user!, unit.assetId))) {
-          return { error: "forbidden" };
+        try {
+          return {
+            units: await agentContext(
+              request.user!,
+              str(args, "unitId"),
+              num(args, "before", 1),
+              num(args, "after", 1),
+            ),
+          };
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : "failed" };
         }
-        const before = Math.min(10, Math.max(0, num(args, "before", 1)));
-        const after = Math.min(10, Math.max(0, num(args, "after", 1)));
-        return {
-          units: await AppDataSource.getRepository(ContentUnit)
-            .createQueryBuilder("cu")
-            .where("cu.asset_id = :assetId", { assetId: unit.assetId })
-            .andWhere("cu.ordinal BETWEEN :lo AND :hi", {
-              lo: Math.max(1, unit.ordinal - before),
-              hi: unit.ordinal + after,
-            })
-            .orderBy("cu.ordinal", "ASC")
-            .getMany(),
-        };
       },
     },
     {
@@ -240,12 +222,19 @@ function buildTools(worker: WorkerClient): ToolDef[] {
         required: ["units", "format"],
       },
       handler: async (args, request) => {
-        const outcome = await createExportJob(request, {
-          units: unitRefsOf(args),
-          format: str(args, "format", "pdf") === "pptx" ? "pptx" : "pdf",
-          nameHint: str(args, "nameHint"),
-        });
-        return outcome;
+        try {
+          return await createExportJob(request.user, {
+            units: unitRefsOf(args),
+            format: str(args, "format", "pdf") === "pptx" ? "pptx" : "pdf",
+            nameHint: str(args, "nameHint"),
+          });
+        } catch (err) {
+          // Surface service errors as tool results, not HTTP failures.
+          return {
+            error:
+              err instanceof Error ? err.message : "export creation failed",
+          };
+        }
       },
     },
     {
@@ -259,29 +248,15 @@ function buildTools(worker: WorkerClient): ToolDef[] {
         required: ["assetId"],
       },
       handler: async (args, request) => {
-        const asset = await AppDataSource.getRepository(Asset).findOneBy({
-          id: str(args, "assetId"),
-        });
-        if (!asset) return { error: "asset not found" };
-        if (!(await canRead(request.user!, asset.id))) {
-          return { error: "forbidden" };
+        try {
+          const { jobId } = await agentTranscribe(
+            request.user!,
+            str(args, "assetId"),
+          );
+          return { jobId, status: "pending" };
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : "failed" };
         }
-        if (asset.kind !== "audio" && asset.kind !== "video") {
-          return { error: `kind ${asset.kind} has no audio track` };
-        }
-        const jobRepo = AppDataSource.getRepository(Job);
-        const existing = await jobRepo.findOne({
-          where: { kind: "transcribe", assetId: asset.id, status: "pending" },
-        });
-        if (existing) return { jobId: existing.id, status: "pending" };
-        const jobId = ulid();
-        await jobRepo.insert({
-          id: jobId,
-          assetId: asset.id,
-          kind: "transcribe",
-          status: "pending",
-        });
-        return { jobId, status: "pending" };
       },
     },
     {

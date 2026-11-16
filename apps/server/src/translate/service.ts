@@ -3,7 +3,11 @@ import { create } from "@bufbuild/protobuf";
 import { TranslateRequestSchema } from "@mentro/protocol";
 import { AppDataSource } from "../db/data-source";
 import { Job, UnitTranslation } from "../db/entities";
-import { getSettings, targetLangsOf, type Settings } from "../settings";
+import {
+  getSettings,
+  targetLangsOf,
+  type Settings,
+} from "../services/settings.service";
 import { publish } from "../bus";
 import {
   invalidateEmbeddingCache,

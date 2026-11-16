@@ -18,6 +18,7 @@ import { registerSourceRoutes } from "./routes/sources";
 import { onFsEvent } from "./fs-events";
 import { registerAssetRoutes } from "./routes/assets";
 import { registerLibraryRoutes } from "./routes/library";
+import { ServiceError } from "./services/errors";
 import { registerSearchRoutes } from "./routes/search";
 import { registerAssistantRoutes } from "./routes/assistant";
 import { registerJobRoutes } from "./routes/jobs";
@@ -176,6 +177,14 @@ async function main(): Promise<void> {
   registerSourceRoutes(app, { worker });
   registerAssetRoutes(app, pool);
   registerLibraryRoutes(app);
+  // Services throw ServiceError(code, message); map it once here so
+  // every thin route handler can simply await the service.
+  app.setErrorHandler((err, _request, reply) => {
+    if (err instanceof ServiceError) {
+      return reply.code(err.code).send({ error: err.message });
+    }
+    return reply.send(err);
+  });
   registerSearchRoutes(app, worker);
   registerAssistantRoutes(app, worker);
   registerJobRoutes(app);

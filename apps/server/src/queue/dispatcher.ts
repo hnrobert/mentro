@@ -22,7 +22,7 @@ import {
   embedTexts,
   invalidateEmbeddingCache,
 } from "../search/embeddings";
-import { getSettings, targetLangsOf } from "../settings";
+import { getSettings, targetLangsOf } from "../services/settings.service";
 import { enqueueTranslateJob, runTranslateJob } from "../translate/service";
 import { logRemoved, logUpserted, unitIdsOfAsset } from "../indexbundle";
 import { publish } from "../bus";

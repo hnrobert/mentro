@@ -1,4 +1,4 @@
-import type { GlossaryEntry } from "../settings";
+import type { GlossaryEntry } from "../services/settings.service";
 
 /** Build the LLM translation system prompt. Hard format contract: the
  *  user message is JSON.stringify(texts); the model must answer with

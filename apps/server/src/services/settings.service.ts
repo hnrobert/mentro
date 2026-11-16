@@ -1,5 +1,4 @@
-import { AppDataSource } from "./db/data-source";
-import { Setting } from "./db/entities";
+import { findSettings, upsertSetting } from "../repositories/misc.repository";
 
 /** App-wide settings persisted in the settings table. Complex values
  *  are JSON-encoded; credential values are masked on read (see
@@ -76,8 +75,7 @@ export function targetLangsOf(settings: Settings): string[] {
 }
 
 export async function getSettings(): Promise<Settings> {
-  const repo = AppDataSource.getRepository(Setting);
-  const rows = await repo.find();
+  const rows = await findSettings();
   const out: Settings = { ...DEFAULTS };
   for (const row of rows) {
     switch (row.key) {
@@ -130,7 +128,6 @@ export function maskSettings(settings: Settings): Record<string, unknown> {
 export async function updateSettings(
   patch: Partial<Settings>,
 ): Promise<Settings> {
-  const repo = AppDataSource.getRepository(Setting);
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
     if ((MASKED_KEYS as readonly string[]).includes(key) && value === SECRET) {
@@ -144,7 +141,7 @@ export async function updateSettings(
           : Array.isArray(value) || typeof value === "object"
             ? JSON.stringify(value)
             : String(value);
-    await repo.upsert({ key, value: encoded }, ["key"]);
+    await upsertSetting(key, encoded);
   }
   return getSettings();
 }

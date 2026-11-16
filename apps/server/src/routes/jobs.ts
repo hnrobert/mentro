@@ -1,13 +1,9 @@
+/** Jobs routes: thin adapter over the job repository (recent jobs for
+ *  polling UIs — no domain logic to isolate). */
+
 import type { FastifyInstance } from "fastify";
-import { AppDataSource } from "../db/data-source";
-import { Job } from "../db/entities";
+import { recentJobs } from "../repositories/job.repository";
 
 export function registerJobRoutes(app: FastifyInstance) {
-  app.get("/api/jobs", async () => {
-    const jobs = await AppDataSource.getRepository(Job).find({
-      order: { updatedAt: "DESC" },
-      take: 100,
-    });
-    return { jobs };
-  });
+  app.get("/api/jobs", async () => ({ jobs: await recentJobs(100) }));
 }
