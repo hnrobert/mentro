@@ -138,7 +138,7 @@ async function removeUser(u: UserRow): Promise<void> {
     alert("Cannot delete yourself");
     return;
   }
-  if (!confirm(`DeleteUsers「${u.username}"?`)) return;
+  if (!confirm(`Delete user "${u.username}"?`)) return;
   await api(`/api/admin/users/${u.id}`, { method: "DELETE" });
   await loadUsers();
 }
@@ -315,7 +315,8 @@ async function saveTranslation(): Promise<void> {
       body: JSON.stringify(tset.value),
     });
     tset.value = { ...tset.value, ...s };
-    message.value = "已保存。新启用的语言会自动开始补翻。";
+    message.value =
+      "Saved. Newly enabled languages start backfilling automatically.";
     await refreshTranslateStatus();
   } catch (err) {
     message.value = String(err);
@@ -329,7 +330,7 @@ async function runTranslateNow(): Promise<void> {
       method: "POST",
       body: JSON.stringify({}),
     });
-    message.value = "已加入翻译队列。";
+    message.value = "Queued.";
     await refreshTranslateStatus();
   } catch (err) {
     message.value = String(err);
@@ -541,20 +542,21 @@ function moveBackend(i: number, dir: -1 | 1): void {
       <template v-else>
         <!-- Languages -->
         <div class="mb-5">
-          <h3 class="mb-2 text-sm font-semibold">翻译语言</h3>
+          <h3 class="mb-2 text-sm font-semibold">Languages</h3>
           <p class="mb-2 text-xs text-muted-foreground">
-            中文↔英文互译始终开启；勾选其他语言后自动增量补翻。
+            Chinese ↔ English is always on; enabling more languages backfills
+            them automatically.
           </p>
           <div class="flex flex-wrap gap-2">
             <span
               class="rounded-full border border-primary/40 bg-muted px-3 py-1 text-xs"
             >
-              中文 zh（常开）
+              zh · always on
             </span>
             <span
               class="rounded-full border border-primary/40 bg-muted px-3 py-1 text-xs"
             >
-              English en（常开）
+              en · always on
             </span>
             <label
               v-for="l in EXTRA_LANGS"
@@ -579,10 +581,10 @@ function moveBackend(i: number, dir: -1 | 1): void {
 
         <!-- Backends -->
         <div class="mb-5">
-          <h3 class="mb-2 text-sm font-semibold">翻译后端（按优先级回退）</h3>
+          <h3 class="mb-2 text-sm font-semibold">Backends (fallback order)</h3>
           <p class="mb-2 text-xs text-muted-foreground">
-            LLM 需在服务器环境变量配置（MENTRO_TRANSLATE_*，缺省回退
-            MENTRO_LLM_*）；翻译 API 密钥填在下方。
+            The LLM comes from server env (MENTRO_TRANSLATE_*, falling back to
+            MENTRO_LLM_*); translation API keys go below.
           </p>
           <div class="space-y-1">
             <div
@@ -616,7 +618,7 @@ function moveBackend(i: number, dir: -1 | 1): void {
                 v-model="tset.translateDeeplKey"
                 type="password"
                 class="mt-1 h-8"
-                placeholder="已配置则显示 __set__"
+                placeholder="set (shows __set__)"
               />
               <span class="mt-1 flex items-center gap-1.5">
                 <input
@@ -624,11 +626,11 @@ function moveBackend(i: number, dir: -1 | 1): void {
                   type="checkbox"
                   class="h-3 w-3"
                 />
-                Pro 版密钥
+                Pro key
               </span>
             </label>
             <label class="text-xs text-muted-foreground">
-              百度 APPID
+              Baidu APPID
               <Input
                 v-model="tset.translateBaiduAppid"
                 type="password"
@@ -636,7 +638,7 @@ function moveBackend(i: number, dir: -1 | 1): void {
               />
             </label>
             <label class="text-xs text-muted-foreground">
-              百度密钥
+              Baidu Key
               <Input
                 v-model="tset.translateBaiduKey"
                 type="password"
@@ -652,7 +654,7 @@ function moveBackend(i: number, dir: -1 | 1): void {
               />
             </label>
             <label class="text-xs text-muted-foreground">
-              LibreTranslate 地址
+              LibreTranslate URL
               <Input
                 v-model="tset.translateLibreUrl"
                 class="mt-1 h-8"
@@ -660,7 +662,7 @@ function moveBackend(i: number, dir: -1 | 1): void {
               />
             </label>
             <label class="text-xs text-muted-foreground">
-              LibreTranslate Key（可选）
+              LibreTranslate Key (optional)
               <Input
                 v-model="tset.translateLibreKey"
                 type="password"
@@ -672,9 +674,9 @@ function moveBackend(i: number, dir: -1 | 1): void {
 
         <!-- Rate + glossary -->
         <div class="mb-5">
-          <h3 class="mb-2 text-sm font-semibold">速率与术语</h3>
+          <h3 class="mb-2 text-sm font-semibold">Rate & Glossary</h3>
           <label class="block text-xs text-muted-foreground">
-            翻译速率（unit/分钟，1–600）
+            Rate (units/min, 1–600)
             <input
               v-model.number="tset.translateRatePerMin"
               type="number"
@@ -684,7 +686,8 @@ function moveBackend(i: number, dir: -1 | 1): void {
             />
           </label>
           <p class="mb-1 mt-3 text-xs text-muted-foreground">
-            术语表（仅 LLM 后端生效；修改后需手动重翻才会应用到已有译文）
+            Glossary (LLM backend only; existing translations pick it up on a
+            manual re-run)
           </p>
           <div class="space-y-1">
             <div
@@ -692,9 +695,9 @@ function moveBackend(i: number, dir: -1 | 1): void {
               :key="i"
               class="flex items-center gap-2"
             >
-              <Input v-model="g.src" class="h-8" placeholder="原文术语" />
+              <Input v-model="g.src" class="h-8" placeholder="Source term" />
               <span class="text-xs text-muted-foreground">→</span>
-              <Input v-model="g.dst" class="h-8" placeholder="译文" />
+              <Input v-model="g.dst" class="h-8" placeholder="Translation" />
               <button
                 class="rounded p-1 text-muted-foreground hover:text-destructive"
                 @click="tset.translateGlossary.splice(i, 1)"
@@ -709,20 +712,20 @@ function moveBackend(i: number, dir: -1 | 1): void {
             class="mt-2"
             @click="tset.translateGlossary.push({ src: '', dst: '' })"
           >
-            + 添加术语
+            + Add term
           </Button>
         </div>
 
         <div class="mb-5 flex items-center gap-2">
-          <Button size="sm" @click="saveTranslation">保存设置</Button>
+          <Button size="sm" @click="saveTranslation">Save</Button>
           <Button variant="outline" size="sm" @click="runTranslateNow">
-            立即翻译
+            Translate Now
           </Button>
         </div>
 
         <!-- Progress -->
         <div>
-          <h3 class="mb-2 text-sm font-semibold">翻译进度</h3>
+          <h3 class="mb-2 text-sm font-semibold">Progress</h3>
           <div class="space-y-2">
             <div
               v-for="l in tstatus"
@@ -734,10 +737,10 @@ function moveBackend(i: number, dir: -1 | 1): void {
                 <span class="text-muted-foreground">
                   {{ l.translated }}/{{ l.total }}
                   <span v-if="l.running" class="ml-1 animate-pulse text-primary"
-                    >翻译中…</span
+                    >running…</span
                   >
                   <span v-else-if="l.pending" class="ml-1 text-muted-foreground"
-                    >排队中</span
+                    >queued</span
                   >
                 </span>
               </div>

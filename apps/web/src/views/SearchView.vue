@@ -328,10 +328,10 @@ onMounted(() => {
 
 type AiMode = "summarize" | "ask" | "plan" | "deepread";
 const AI_MODES: Array<{ value: AiMode; label: string }> = [
-  { value: "summarize", label: "总结" },
-  { value: "ask", label: "问答" },
-  { value: "plan", label: "计划" },
-  { value: "deepread", label: "深读" },
+  { value: "summarize", label: "Summarize" },
+  { value: "ask", label: "Ask" },
+  { value: "plan", label: "Plan" },
+  { value: "deepread", label: "Deep Read" },
 ];
 
 const aiOn = ref(localStorage.getItem("mentro:ai-on") === "1");
@@ -596,11 +596,11 @@ function runSuggestedQuery(q: string): void {
               : 'text-muted-foreground'
           "
           :aria-pressed="aiOn"
-          title="AI 助手：总结 / 问答 / 研究计划 / 单页深读"
+          title="AI assistant: summarize / ask / research plan / deep read"
           @click="toggleAi"
         >
           <Sparkles class="h-3.5 w-3.5" />
-          AI 助手
+          AI Assistant
         </button>
       </div>
 
@@ -721,7 +721,7 @@ function runSuggestedQuery(q: string): void {
           @click="stopAi"
         >
           <Square class="h-3 w-3" />
-          停止
+          Stop
         </button>
       </div>
 
@@ -733,13 +733,15 @@ function runSuggestedQuery(q: string): void {
             :disabled="aiBusy || !searched || hits.length === 0"
             @click="runAi('summarize')"
           >
-            总结「{{ executedQuery }}」的前 {{ Math.min(hits.length, 12) }} 条
+            Summarize top {{ Math.min(hits.length, 12) }} of "{{
+              executedQuery.slice(0, 24)
+            }}"
           </Button>
           <span
             v-if="!searched || hits.length === 0"
             class="text-xs text-muted-foreground"
           >
-            先执行一次搜索，再总结
+            Run a search first
           </span>
         </div>
         <form
@@ -749,7 +751,7 @@ function runSuggestedQuery(q: string): void {
         >
           <input
             v-model="askInput"
-            placeholder="就库内资料提问，如：堆场派位有哪些策略？"
+            placeholder="Ask about the library, e.g. yard allocation strategies…"
             class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
           />
           <Button
@@ -757,7 +759,7 @@ function runSuggestedQuery(q: string): void {
             type="submit"
             :disabled="aiBusy || !askInput.trim()"
           >
-            提问
+            Ask
           </Button>
         </form>
         <form
@@ -767,7 +769,7 @@ function runSuggestedQuery(q: string): void {
         >
           <input
             v-model="topicInput"
-            placeholder="输入研究主题，生成检索/阅读计划"
+            placeholder="Enter a research topic for a stepwise reading plan…"
             class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
           />
           <Button
@@ -775,7 +777,7 @@ function runSuggestedQuery(q: string): void {
             type="submit"
             :disabled="aiBusy || !topicInput.trim()"
           >
-            生成计划
+            Generate Plan
           </Button>
         </form>
         <div v-else class="flex items-center gap-2 text-xs">
@@ -790,11 +792,11 @@ function runSuggestedQuery(q: string): void {
               :disabled="aiBusy"
               @click="aiTarget && runAi('deepread')"
             >
-              重新深读
+              Re-read
             </button>
           </template>
           <span v-else class="text-muted-foreground">
-            在下方搜索结果里点 📖 选择要深读的页
+            Pick a result below (📖) to deep-read it
           </span>
         </div>
       </div>
@@ -808,18 +810,17 @@ function runSuggestedQuery(q: string): void {
           v-else-if="aiBusy && !aiText"
           class="animate-pulse text-muted-foreground"
         >
-          检索库内资料并生成中…
+          Searching the library & generating…
         </p>
         <p v-else-if="!aiText" class="text-muted-foreground">
-          {{
-            AI_MODES.find((m) => m.value === aiMode)?.label
-          }}结果会显示在这里。
+          {{ AI_MODES.find((m) => m.value === aiMode)?.label }} output appears
+          here.
         </p>
         <template v-for="(l, li) in aiLines" v-else :key="li">
           <div v-if="l.kind === 'query'" class="my-1">
             <button
               class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors hover:bg-accent"
-              title="以此检索词搜索"
+              title="Run this query"
               @click="runSuggestedQuery(l.q)"
             >
               <Search class="h-3 w-3" />
@@ -910,7 +911,7 @@ function runSuggestedQuery(q: string): void {
           <span class="flex shrink-0 items-center gap-1">
             <button
               class="rounded p-1 text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
-              title="AI 深读此页"
+              title="AI deep-read this page"
               @click.stop="startDeepread(hit)"
             >
               <BookOpen class="h-3.5 w-3.5" />
@@ -938,10 +939,10 @@ function runSuggestedQuery(q: string): void {
         <p
           v-if="hit.translated"
           class="mt-1 line-clamp-2 rounded bg-muted/50 px-2 py-1 text-xs text-muted-foreground"
-          :title="`命中 ${hit.translated.lang} 译文`"
+          :title="`Matched ${hit.translated.lang} translation`"
         >
           <span class="mr-1 font-medium text-foreground"
-            >译·{{ hit.translated.lang }}</span
+            >trans·{{ hit.translated.lang }}</span
           >
           {{ hit.translated.snippet }}
         </p>

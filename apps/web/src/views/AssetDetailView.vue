@@ -72,6 +72,19 @@ async function ensureTranslations(u: DetailUnit): Promise<void> {
   }
 }
 
+const LANG_NAMES: Record<string, string> = {
+  zh: "Chinese",
+  en: "English",
+  ja: "Japanese",
+  ko: "Korean",
+  de: "German",
+  fr: "French",
+  ru: "Russian",
+  es: "Spanish",
+};
+
+const langName = (code: string): string => LANG_NAMES[code] ?? code;
+
 function availableLangs(u: DetailUnit): string[] {
   return unitTranslations.value.get(u.id)?.map((t) => t.lang) ?? [];
 }
@@ -80,7 +93,7 @@ function displayedText(u: DetailUnit): string {
   const lang = unitLang.value.get(u.id);
   if (!lang || lang === "orig") return u.text || "(no text)";
   const t = unitTranslations.value.get(u.id)?.find((x) => x.lang === lang);
-  return t?.text?.trim() || "(该语言暂无译文)";
+  return t?.text?.trim() || "(no translation yet)";
 }
 
 function setUnitLang(u: DetailUnit, lang: string): void {
@@ -537,7 +550,7 @@ onMounted(() => {
                 "
                 @click="setUnitLang(u, 'orig')"
               >
-                原文
+                Original
               </button>
               <button
                 v-for="lang in availableLangs(u)"
@@ -550,7 +563,7 @@ onMounted(() => {
                 "
                 @click="setUnitLang(u, lang)"
               >
-                译文 · {{ lang }}
+                {{ langName(lang) }}
               </button>
             </div>
             <pre
