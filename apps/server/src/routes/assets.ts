@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { AppDataSource } from "../db/data-source";
-import { Asset, ContentUnit } from "../db/entities";
+import { Asset, ContentUnit, UnitTranslation } from "../db/entities";
 import type { WorkerPool } from "../worker/pool";
 import { canRead, readableAssetIds } from "../auth/perm";
 
@@ -137,6 +137,31 @@ export function registerAssetRoutes(app: FastifyInstance, pool?: WorkerPool) {
       }
       reply.type("image/png");
       return reply.send(fs.createReadStream(file));
+    },
+  );
+
+  // Translations of one unit, lazy-loaded by the detail view's
+  // 原文/译文 toggle (all langs at once would bloat /api/assets/:id).
+  app.get<{ Params: { unitId: string } }>(
+    "/api/units/:unitId/translations",
+    async (request, reply) => {
+      const unit = await AppDataSource.getRepository(ContentUnit).findOneBy({
+        id: request.params.unitId,
+      });
+      if (!unit) return reply.code(404).send({ error: "unit not found" });
+      if (!(await canRead(request.user!, unit.assetId))) {
+        return reply.code(403).send({ error: "forbidden" });
+      }
+      const rows = await AppDataSource.getRepository(UnitTranslation).find({
+        where: { unitId: unit.id, status: "ok" },
+      });
+      return {
+        translations: rows.map((r) => ({
+          lang: r.lang,
+          title: r.title,
+          text: r.text,
+        })),
+      };
     },
   );
 

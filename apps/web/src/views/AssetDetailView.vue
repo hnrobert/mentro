@@ -42,6 +42,55 @@ interface DetailUnit {
   hidden?: boolean;
 }
 
+interface UnitTranslations {
+  translations: Array<{
+    lang: string;
+    title: string | null;
+    text: string | null;
+  }>;
+}
+
+/** unitId -> per-lang text view ("orig" | lang code). */
+const unitLang = ref(new Map<string, string>());
+/** unitId -> fetched translations (cached on first open). */
+const unitTranslations = ref(
+  new Map<string, UnitTranslations["translations"]>(),
+);
+
+async function ensureTranslations(u: DetailUnit): Promise<void> {
+  if (unitTranslations.value.has(u.id)) return;
+  unitTranslations.value.set(u.id, []); // guard against concurrent loads
+  try {
+    const res = await api<UnitTranslations>(`/api/units/${u.id}/translations`);
+    unitTranslations.value.set(u.id, res.translations);
+    // Default the view to the first available translation on first load.
+    if (!unitLang.value.has(u.id) && res.translations.length > 0) {
+      unitLang.value.set(u.id, res.translations[0]!.lang);
+    }
+  } catch {
+    unitTranslations.value.set(u.id, []);
+  }
+}
+
+function availableLangs(u: DetailUnit): string[] {
+  return unitTranslations.value.get(u.id)?.map((t) => t.lang) ?? [];
+}
+
+function displayedText(u: DetailUnit): string {
+  const lang = unitLang.value.get(u.id);
+  if (!lang || lang === "orig") return u.text || "(no text)";
+  const t = unitTranslations.value.get(u.id)?.find((x) => x.lang === lang);
+  return t?.text?.trim() || "(该语言暂无译文)";
+}
+
+function setUnitLang(u: DetailUnit, lang: string): void {
+  unitLang.value.set(u.id, lang);
+}
+
+function onUnitToggle(u: DetailUnit, ev: Event): void {
+  if ((ev.target as HTMLDetailsElement).open) void ensureTranslations(u);
+}
+
 const asset = ref<DetailAsset | null>(null);
 const units = ref<DetailUnit[]>([]);
 const groups = ref<GroupNode[]>([]);
@@ -441,7 +490,10 @@ onMounted(() => {
               active?.id === u.id ? 'border-primary/60' : '',
               cart.has(u.id) ? 'bg-accent/30' : '',
             ]"
-            @toggle="($event.target as HTMLDetailsElement).open && setActive(u)"
+            @toggle="
+              ($event.target as HTMLDetailsElement).open &&
+              (setActive(u), onUnitToggle(u, $event))
+            "
             @click="rowClick(u, $event)"
           >
             <summary
@@ -472,9 +524,38 @@ onMounted(() => {
                 {{ u.title.slice(0, 60) }}
               </span>
             </summary>
+            <div
+              v-if="availableLangs(u).length > 0"
+              class="mt-2 flex items-center gap-1 border-b pb-2"
+            >
+              <button
+                class="rounded-full px-2 py-0.5 text-[11px] transition-colors"
+                :class="
+                  (unitLang.get(u.id) ?? '') === 'orig'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-accent'
+                "
+                @click="setUnitLang(u, 'orig')"
+              >
+                原文
+              </button>
+              <button
+                v-for="lang in availableLangs(u)"
+                :key="lang"
+                class="rounded-full px-2 py-0.5 text-[11px] transition-colors"
+                :class="
+                  unitLang.get(u.id) === lang
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-accent'
+                "
+                @click="setUnitLang(u, lang)"
+              >
+                译文 · {{ lang }}
+              </button>
+            </div>
             <pre
               class="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground"
-              >{{ u.text || "(no text)" }}</pre>
+              >{{ displayedText(u) }}</pre>
           </details>
         </div>
       </template>

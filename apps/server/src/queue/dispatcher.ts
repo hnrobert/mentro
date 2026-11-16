@@ -3,14 +3,27 @@ import path from "node:path";
 import { ulid } from "ulid";
 import { AppDataSource } from "../db/data-source";
 import { serializedTx } from "../db/tx";
-import { Asset, ContentUnit, Job, UnitEmbedding } from "../db/entities";
-import { ftsDeleteAsset, ftsReplaceUnits } from "../search/fts";
+import {
+  Asset,
+  ContentUnit,
+  Job,
+  UnitEmbedding,
+  UnitTranslation,
+  UnitTranslationEmbedding,
+} from "../db/entities";
+import {
+  ftsDeleteAsset,
+  ftsDeleteTranslationsByAsset,
+  ftsReplaceUnits,
+} from "../search/fts";
 import {
   storeAssetEmbeddings,
   unitEmbeddingInput,
   embedTexts,
   invalidateEmbeddingCache,
 } from "../search/embeddings";
+import { getSettings, targetLangsOf } from "../settings";
+import { enqueueTranslateJob, runTranslateJob } from "../translate/service";
 import { logRemoved, logUpserted, unitIdsOfAsset } from "../indexbundle";
 import { publish } from "../bus";
 import type { WorkerClient } from "../worker/client";
@@ -33,6 +46,9 @@ const TICK_MS = 500;
 const EMBED_BATCH = 32;
 /** Transcript units group at most this many milliseconds of speech. */
 const TRANSCRIPT_WINDOW_MS = 30_000;
+/** Translate jobs hold a worker while pacing against a rate limit —
+ *  cap them so extraction/transcription never starves behind them. */
+const TRANSLATE_SLOTS = 2;
 
 export interface DispatcherEvents {
   onJobUpdate?: (job: Job) => void;
@@ -60,6 +76,21 @@ export class Dispatcher {
 
   start(): void {
     if (this.timer) return;
+    // Boot reconciliation: a restart kills in-flight jobs mid-run and
+    // their rows stay "running" forever — which also blocks
+    // payload-aware enqueues (translate dedupe). No job can genuinely
+    // be running before the dispatcher starts, so reset them.
+    void AppDataSource.getRepository(Job)
+      .createQueryBuilder()
+      .update(Job)
+      .set({ status: "pending", updatedAt: new Date() })
+      .where("status = :st", { st: "running" })
+      .execute()
+      .then((r) => {
+        if (r.affected)
+          console.log(`[queue] recovered ${r.affected} orphaned running jobs`);
+      })
+      .catch((err) => console.warn(`[queue] orphan recovery failed: ${err}`));
     this.timer = setInterval(() => void this.tick(), TICK_MS);
   }
 
@@ -68,22 +99,32 @@ export class Dispatcher {
     this.timer = null;
   }
 
+  private activeTranslate = 0;
+
   private async tick(): Promise<void> {
     // Concurrency is worker-bound: each job claims an idle worker for
     // its whole duration (the serve loop inside one worker process is
-    // sequential; the pool IS the parallelism).
+    // sequential; the pool IS the parallelism). Translate jobs are
+    // capped (TRANSLATE_SLOTS): their pace is throttled by settings,
+    // so an unfilled translate backlog must never head-of-line block
+    // extract/embed behind paid-API latency.
     for (;;) {
       const worker = this.pool.tryClaim();
       if (!worker) return;
       const jobRepo = AppDataSource.getRepository(Job);
-      const job = await jobRepo.findOne({
+      const candidates = await jobRepo.find({
         where: { status: "pending" },
         order: { createdAt: "ASC" },
+        take: 50,
       });
+      const job = candidates.find(
+        (j) => j.kind !== "translate" || this.activeTranslate < TRANSLATE_SLOTS,
+      );
       if (!job) {
         this.pool.release(worker);
         return;
       }
+      if (job.kind === "translate") this.activeTranslate++;
       await jobRepo.update(
         { id: job.id },
         { status: "running", updatedAt: new Date() },
@@ -91,6 +132,7 @@ export class Dispatcher {
       void this.run(job.id, worker)
         .catch((err) => console.error("[queue] job crashed:", err))
         .finally(() => {
+          if (job.kind === "translate") this.activeTranslate--;
           this.pool.release(worker);
         });
     }
@@ -106,6 +148,8 @@ export class Dispatcher {
         return this.runTranscribe(job, worker);
       case "embed":
         return this.runEmbed(job, worker);
+      case "translate":
+        return this.runTranslate(job, worker);
       case "export":
         return this.runExport(job, worker);
       default:
@@ -168,6 +212,18 @@ export class Dispatcher {
         }
         if (result.units.length > 0) {
           await this.enqueueOnce("embed", asset.id);
+          // Cross-lingual follow-up: one translate job per enabled
+          // target language for the fresh units.
+          try {
+            const settings = await getSettings();
+            for (const lang of targetLangsOf(settings)) {
+              await enqueueTranslateJob({ assetId: asset.id, lang });
+            }
+          } catch (err) {
+            console.warn(
+              `[translate] follow-up scheduling failed: ${String(err)}`,
+            );
+          }
         }
         return;
       }
@@ -241,10 +297,17 @@ export class Dispatcher {
     await serializedTx(async (m) => {
       const unitRepo = m.getRepository(ContentUnit);
       await ftsDeleteAsset(assetId, m);
+      // Translations FTS rows resolve unit ids through content_units —
+      // delete BEFORE the units themselves go.
+      await ftsDeleteTranslationsByAsset(assetId, m);
       await logRemoved(await unitIdsOfAsset(assetId, m), m);
       await unitRepo.delete({ assetId });
       // Re-extraction replaces units: stale embeddings must go too.
       await m.getRepository(UnitEmbedding).delete({ assetId });
+      // ...and translations + their embedding mirrors (unit ids are
+      // new ULIDs; re-translate follows the extract).
+      await m.getRepository(UnitTranslation).delete({ assetId });
+      await m.getRepository(UnitTranslationEmbedding).delete({ assetId });
       const units = result.units.map((u, i) => ({
         id: ulid(),
         assetId,
@@ -268,6 +331,18 @@ export class Dispatcher {
     });
     invalidateEmbeddingCache();
     publish({ event: "index.changed" });
+  }
+
+  // --- translate -----------------------------------------------------------
+
+  private async runTranslate(job: Job, worker: WorkerClient): Promise<void> {
+    try {
+      await runTranslateJob(job, worker);
+      await this.finish(job.id, "done", null, null);
+    } catch (err) {
+      const attempts = job.attempts + 1;
+      await this.failJob(job, attempts < MAX_ATTEMPTS, attempts, String(err));
+    }
   }
 
   // --- transcribe --------------------------------------------------------

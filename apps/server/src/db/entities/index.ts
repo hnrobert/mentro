@@ -8,5 +8,7 @@ export * from "./user-group.entity";
 export * from "./user-group-member.entity";
 export * from "./source.entity";
 export * from "./unit-embedding.entity";
+export * from "./unit-translation.entity";
+export * from "./unit-translation-embedding.entity";
 export * from "./user-session.entity";
 export * from "./user.entity";

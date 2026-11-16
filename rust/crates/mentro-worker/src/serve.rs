@@ -20,7 +20,7 @@ use crate::{
         ECapability, ERenderWant, ErrorInfo, ReadyMessage, Request, Response, ScanResult,
         WorkerFrame, request::Body as ReqBody, response, worker_frame::Body,
     },
-    scan, tools, transcribe, unpack, watch,
+    scan, tools, transcribe, translate, unpack, watch,
 };
 
 static WATCH_HUB: once_cell::sync::Lazy<Mutex<watch::WatchHub>> =
@@ -100,6 +100,10 @@ fn handle(req: Request) -> WorkerResult<response::Result> {
         Some(ReqBody::Embed(r)) => {
             let result = embed::embed(&r)?;
             Ok(response::Result::EmbedResult(result))
+        }
+        Some(ReqBody::Translate(r)) => {
+            let result = translate::translate(&r)?;
+            Ok(response::Result::TranslateResult(result))
         }
         Some(ReqBody::Pack(r)) => {
             let result = export::pack(&r)?;
@@ -234,6 +238,7 @@ pub fn run() -> i32 {
             ECapability::Export as i32,
             ECapability::Transcribe as i32,
             ECapability::Embed as i32,
+            ECapability::Translate as i32,
         ],
         tools,
     };

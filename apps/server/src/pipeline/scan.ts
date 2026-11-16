@@ -2,8 +2,16 @@ import { ulid } from "ulid";
 import type { EntityManager, QueryDeepPartialEntity } from "typeorm";
 import { AppDataSource } from "../db/data-source";
 import { serializedTx } from "../db/tx";
-import { Asset, ContentUnit, Job, Source, UnitEmbedding } from "../db/entities";
-import { ftsDeleteAsset } from "../search/fts";
+import {
+  Asset,
+  ContentUnit,
+  Job,
+  Source,
+  UnitEmbedding,
+  UnitTranslation,
+  UnitTranslationEmbedding,
+} from "../db/entities";
+import { ftsDeleteAsset, ftsDeleteTranslationsByAsset } from "../search/fts";
 import { logRemoved, unitIdsOfAsset } from "../indexbundle";
 import { publish } from "../bus";
 import type { WorkerClient } from "../worker/client";
@@ -42,8 +50,11 @@ export async function deleteAssetCascade(
 ): Promise<void> {
   const em = m ?? AppDataSource.manager;
   await ftsDeleteAsset(assetId, em);
+  await ftsDeleteTranslationsByAsset(assetId, em);
   await logRemoved(await unitIdsOfAsset(assetId, em), em);
   await em.getRepository(UnitEmbedding).delete({ assetId });
+  await em.getRepository(UnitTranslation).delete({ assetId });
+  await em.getRepository(UnitTranslationEmbedding).delete({ assetId });
   await em.getRepository(ContentUnit).delete({ assetId });
   await em.getRepository(Job).delete({ assetId });
   await em.getRepository(Asset).delete({ id: assetId });
@@ -147,7 +158,12 @@ export async function runSourceScan(
       // Content changed: drop stale units + FTS rows, reset status.
       if (hashChanged) {
         await ftsDeleteAsset(prior.id, m);
+        await ftsDeleteTranslationsByAsset(prior.id, m);
         await logRemoved(await unitIdsOfAsset(prior.id, m), m);
+        await m.getRepository(UnitTranslation).delete({ assetId: prior.id });
+        await m
+          .getRepository(UnitTranslationEmbedding)
+          .delete({ assetId: prior.id });
         await m.getRepository(ContentUnit).delete({ assetId: prior.id });
       }
       const nextStatus = !extractable

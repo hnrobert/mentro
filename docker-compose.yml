@@ -19,6 +19,13 @@ services:
       - MENTRO_LLM_BASE_URL=${MENTRO_LLM_BASE_URL:-}
       - MENTRO_LLM_API_KEY=${MENTRO_LLM_API_KEY:-}
       - MENTRO_LLM_MODEL=${MENTRO_LLM_MODEL:-}
+      # Translation may use a different (or same) endpoint; EXTRA is a
+      # JSON object merged into every LLM translate request body — e.g.
+      # {"thinking":{"type":"disabled"}} for reasoning models.
+      - MENTRO_TRANSLATE_BASE_URL=${MENTRO_TRANSLATE_BASE_URL:-}
+      - MENTRO_TRANSLATE_API_KEY=${MENTRO_TRANSLATE_API_KEY:-}
+      - MENTRO_TRANSLATE_MODEL=${MENTRO_TRANSLATE_MODEL:-}
+      - MENTRO_TRANSLATE_LLM_EXTRA=${MENTRO_TRANSLATE_LLM_EXTRA:-}
       # them instead of docker-managed containers (no docker socket in
       # the app container).
       - MENTRO_OFFICE_URL=http://gotenberg:3000

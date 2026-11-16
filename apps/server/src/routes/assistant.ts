@@ -74,7 +74,10 @@ function hitsContext(hits: SearchHit[], perHitChars: number): string {
   return hits
     .map((h, i) => {
       const snippet = cleanSnippet(h.snippet).slice(0, perHitChars);
-      return `[${i + 1}] 《${hitFileName(h)}》${h.unitType} ${h.ordinal}：${h.title ?? ""}\n${snippet}`;
+      const translated = h.translated
+        ? `\n译文(${h.translated.lang}): ${cleanSnippet(h.translated.snippet).slice(0, Math.round(perHitChars / 2))}`
+        : "";
+      return `[${i + 1}] 《${hitFileName(h)}》${h.unitType} ${h.ordinal}：${h.title ?? ""}\n${snippet}${translated}`;
     })
     .join("\n\n");
 }

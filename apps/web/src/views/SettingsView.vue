@@ -25,12 +25,14 @@ interface UserRow {
   createdAt: string;
 }
 
-const tab = ref<"sources" | "users" | "groups">(
+const tab = ref<"sources" | "users" | "groups" | "translation">(
   route.name === "settings-users"
     ? "users"
     : route.name === "settings-groups"
       ? "groups"
-      : "sources",
+      : route.name === "settings-translation"
+        ? "translation"
+        : "sources",
 );
 const sources = ref<SourceRow[]>([]);
 const users = ref<UserRow[]>([]);
@@ -222,7 +224,126 @@ onMounted(() => {
   void loadUserGroups();
   void loadSources();
   void loadUsers();
+  if (auth.user?.role === "super_admin" && tab.value === "translation") {
+    void loadTranslation();
+  }
 });
+
+// --- translation tab -------------------------------------------------------
+
+interface TranslateSettings {
+  translateEnabledLangs: string[];
+  translateBackendOrder: string[];
+  translateRatePerMin: number;
+  translateGlossary: Array<{ src: string; dst: string }>;
+  translateDeeplKey: string;
+  translateDeeplPro: boolean;
+  translateBaiduAppid: string;
+  translateBaiduKey: string;
+  translateGoogleKey: string;
+  translateLibreUrl: string;
+  translateLibreKey: string;
+}
+
+interface LangStatus {
+  lang: string;
+  total: number;
+  translated: number;
+  missing: number;
+  pending: boolean;
+  running: boolean;
+}
+
+const EXTRA_LANGS = [
+  { code: "ja", label: "日本語 ja" },
+  { code: "ko", label: "한국어 ko" },
+  { code: "de", label: "Deutsch de" },
+  { code: "fr", label: "Français fr" },
+  { code: "ru", label: "Русский ru" },
+  { code: "es", label: "Español es" },
+] as const;
+
+const tset = ref<TranslateSettings | null>(null);
+const tstatus = ref<LangStatus[]>([]);
+let statusTimer: ReturnType<typeof setInterval> | null = null;
+
+async function loadTranslation(): Promise<void> {
+  try {
+    const s = await api<TranslateSettings>("/api/admin/settings");
+    tset.value = {
+      ...s,
+      translateGlossary: s.translateGlossary ?? [],
+    };
+    await refreshTranslateStatus();
+  } catch (err) {
+    message.value = String(err);
+  }
+}
+
+async function refreshTranslateStatus(): Promise<void> {
+  try {
+    const res = await api<{ langs: LangStatus[] }>(
+      "/api/admin/translate/status",
+    );
+    tstatus.value = res.langs;
+    const busy = res.langs.some((l) => l.pending || l.running);
+    if (busy && statusTimer === null) {
+      statusTimer = setInterval(() => void refreshTranslateStatus(), 3000);
+    } else if (!busy && statusTimer !== null) {
+      clearInterval(statusTimer);
+      statusTimer = null;
+    }
+  } catch {
+    /* status is best-effort */
+  }
+}
+
+function toggleLang(code: string): void {
+  if (!tset.value) return;
+  const cur = tset.value.translateEnabledLangs;
+  tset.value.translateEnabledLangs = cur.includes(code)
+    ? cur.filter((c) => c !== code)
+    : [...cur, code];
+}
+
+async function saveTranslation(): Promise<void> {
+  if (!tset.value) return;
+  message.value = "";
+  try {
+    const s = await api<TranslateSettings>("/api/admin/settings", {
+      method: "PATCH",
+      body: JSON.stringify(tset.value),
+    });
+    tset.value = { ...tset.value, ...s };
+    message.value = "已保存。新启用的语言会自动开始补翻。";
+    await refreshTranslateStatus();
+  } catch (err) {
+    message.value = String(err);
+  }
+}
+
+async function runTranslateNow(): Promise<void> {
+  message.value = "";
+  try {
+    await api("/api/admin/translate/run", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    message.value = "已加入翻译队列。";
+    await refreshTranslateStatus();
+  } catch (err) {
+    message.value = String(err);
+  }
+}
+
+function moveBackend(i: number, dir: -1 | 1): void {
+  if (!tset.value) return;
+  const order = [...tset.value.translateBackendOrder];
+  const j = i + dir;
+  if (j < 0 || j >= order.length) return;
+  [order[i], order[j]] = [order[j], order[i]];
+  tset.value.translateBackendOrder = order;
+}
 </script>
 
 <template>
@@ -241,6 +362,19 @@ onMounted(() => {
         @click="tab = 'users'"
       >
         Users
+      </button>
+      <button
+        v-if="auth.user?.role === 'super_admin'"
+        class="rounded px-3 py-1.5 text-sm transition-colors hover:bg-accent"
+        :class="tab === 'translation' ? 'bg-accent font-medium' : ''"
+        @click="
+          () => {
+            tab = 'translation';
+            if (!tset) void loadTranslation();
+          }
+        "
+      >
+        Translation
       </button>
     </div>
     <p v-if="message" class="mb-3 text-xs text-muted-foreground">
@@ -360,7 +494,7 @@ onMounted(() => {
       </div>
     </template>
 
-    <template v-else>
+    <template v-else-if="tab === 'users'">
       <label class="mb-4 flex items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -399,6 +533,226 @@ onMounted(() => {
           </div>
         </div>
       </div>
+    </template>
+
+    <!-- Translation tab -->
+    <template v-else-if="tab === 'translation'">
+      <div v-if="!tset" class="text-sm text-muted-foreground">Loading…</div>
+      <template v-else>
+        <!-- Languages -->
+        <div class="mb-5">
+          <h3 class="mb-2 text-sm font-semibold">翻译语言</h3>
+          <p class="mb-2 text-xs text-muted-foreground">
+            中文↔英文互译始终开启；勾选其他语言后自动增量补翻。
+          </p>
+          <div class="flex flex-wrap gap-2">
+            <span
+              class="rounded-full border border-primary/40 bg-muted px-3 py-1 text-xs"
+            >
+              中文 zh（常开）
+            </span>
+            <span
+              class="rounded-full border border-primary/40 bg-muted px-3 py-1 text-xs"
+            >
+              English en（常开）
+            </span>
+            <label
+              v-for="l in EXTRA_LANGS"
+              :key="l.code"
+              class="flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors"
+              :class="
+                tset.translateEnabledLangs.includes(l.code)
+                  ? 'border-primary bg-primary/10 font-medium'
+                  : 'text-muted-foreground'
+              "
+            >
+              <input
+                type="checkbox"
+                class="h-3 w-3"
+                :checked="tset.translateEnabledLangs.includes(l.code)"
+                @change="toggleLang(l.code)"
+              />
+              {{ l.label }}
+            </label>
+          </div>
+        </div>
+
+        <!-- Backends -->
+        <div class="mb-5">
+          <h3 class="mb-2 text-sm font-semibold">翻译后端（按优先级回退）</h3>
+          <p class="mb-2 text-xs text-muted-foreground">
+            LLM 需在服务器环境变量配置（MENTRO_TRANSLATE_*，缺省回退
+            MENTRO_LLM_*）；翻译 API 密钥填在下方。
+          </p>
+          <div class="space-y-1">
+            <div
+              v-for="(b, i) in tset.translateBackendOrder"
+              :key="b"
+              class="flex items-center justify-between rounded border px-3 py-1.5 text-sm"
+            >
+              <span class="font-mono text-xs">{{ b }}</span>
+              <span class="flex gap-1">
+                <button
+                  class="rounded px-1.5 text-xs text-muted-foreground hover:bg-accent disabled:opacity-30"
+                  :disabled="i === 0"
+                  @click="moveBackend(i, -1)"
+                >
+                  ↑
+                </button>
+                <button
+                  class="rounded px-1.5 text-xs text-muted-foreground hover:bg-accent disabled:opacity-30"
+                  :disabled="i === tset.translateBackendOrder.length - 1"
+                  @click="moveBackend(i, 1)"
+                >
+                  ↓
+                </button>
+              </span>
+            </div>
+          </div>
+          <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label class="text-xs text-muted-foreground">
+              DeepL API Key
+              <Input
+                v-model="tset.translateDeeplKey"
+                type="password"
+                class="mt-1 h-8"
+                placeholder="已配置则显示 __set__"
+              />
+              <span class="mt-1 flex items-center gap-1.5">
+                <input
+                  v-model="tset.translateDeeplPro"
+                  type="checkbox"
+                  class="h-3 w-3"
+                />
+                Pro 版密钥
+              </span>
+            </label>
+            <label class="text-xs text-muted-foreground">
+              百度 APPID
+              <Input
+                v-model="tset.translateBaiduAppid"
+                type="password"
+                class="mt-1 h-8"
+              />
+            </label>
+            <label class="text-xs text-muted-foreground">
+              百度密钥
+              <Input
+                v-model="tset.translateBaiduKey"
+                type="password"
+                class="mt-1 h-8"
+              />
+            </label>
+            <label class="text-xs text-muted-foreground">
+              Google API Key
+              <Input
+                v-model="tset.translateGoogleKey"
+                type="password"
+                class="mt-1 h-8"
+              />
+            </label>
+            <label class="text-xs text-muted-foreground">
+              LibreTranslate 地址
+              <Input
+                v-model="tset.translateLibreUrl"
+                class="mt-1 h-8"
+                placeholder="http://libre:5000"
+              />
+            </label>
+            <label class="text-xs text-muted-foreground">
+              LibreTranslate Key（可选）
+              <Input
+                v-model="tset.translateLibreKey"
+                type="password"
+                class="mt-1 h-8"
+              />
+            </label>
+          </div>
+        </div>
+
+        <!-- Rate + glossary -->
+        <div class="mb-5">
+          <h3 class="mb-2 text-sm font-semibold">速率与术语</h3>
+          <label class="block text-xs text-muted-foreground">
+            翻译速率（unit/分钟，1–600）
+            <input
+              v-model.number="tset.translateRatePerMin"
+              type="number"
+              min="1"
+              max="600"
+              class="mt-1 flex h-8 w-32 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+          </label>
+          <p class="mb-1 mt-3 text-xs text-muted-foreground">
+            术语表（仅 LLM 后端生效；修改后需手动重翻才会应用到已有译文）
+          </p>
+          <div class="space-y-1">
+            <div
+              v-for="(g, i) in tset.translateGlossary"
+              :key="i"
+              class="flex items-center gap-2"
+            >
+              <Input v-model="g.src" class="h-8" placeholder="原文术语" />
+              <span class="text-xs text-muted-foreground">→</span>
+              <Input v-model="g.dst" class="h-8" placeholder="译文" />
+              <button
+                class="rounded p-1 text-muted-foreground hover:text-destructive"
+                @click="tset.translateGlossary.splice(i, 1)"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            class="mt-2"
+            @click="tset.translateGlossary.push({ src: '', dst: '' })"
+          >
+            + 添加术语
+          </Button>
+        </div>
+
+        <div class="mb-5 flex items-center gap-2">
+          <Button size="sm" @click="saveTranslation">保存设置</Button>
+          <Button variant="outline" size="sm" @click="runTranslateNow">
+            立即翻译
+          </Button>
+        </div>
+
+        <!-- Progress -->
+        <div>
+          <h3 class="mb-2 text-sm font-semibold">翻译进度</h3>
+          <div class="space-y-2">
+            <div
+              v-for="l in tstatus"
+              :key="l.lang"
+              class="rounded border px-3 py-2 text-xs"
+            >
+              <div class="mb-1 flex items-center justify-between">
+                <span class="font-medium">{{ l.lang }}</span>
+                <span class="text-muted-foreground">
+                  {{ l.translated }}/{{ l.total }}
+                  <span v-if="l.running" class="ml-1 animate-pulse text-primary"
+                    >翻译中…</span
+                  >
+                  <span v-else-if="l.pending" class="ml-1 text-muted-foreground"
+                    >排队中</span
+                  >
+                </span>
+              </div>
+              <div class="h-1.5 overflow-hidden rounded bg-muted">
+                <div
+                  class="h-full rounded bg-primary transition-all"
+                  :style="{
+                    width: `${l.total ? Math.round((l.translated / l.total) * 100) : 0}%`,
+                  }"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
     </template>
   </div>
 </template>

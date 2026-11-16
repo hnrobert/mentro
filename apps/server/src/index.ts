@@ -29,7 +29,8 @@ import { registerWebStatic } from "./web-static";
 import { ensurePoolSource, mountEnvSources } from "./pool";
 import { registerUploadRoutes } from "./routes/upload";
 import { initSegmenter } from "./search/segment";
-import { ftsSelfHeal } from "./search/fts";
+import { ftsSelfHeal, translationsSelfHeal } from "./search/fts";
+import { scheduleTranslationBackfill } from "./translate/service";
 import { WorkerPool, defaultPoolSize } from "./worker/pool";
 import { Dispatcher } from "./queue/dispatcher";
 import { clientCount, publish } from "./bus";
@@ -65,6 +66,7 @@ async function main(): Promise<void> {
   // Rowid-keyed FTS mirror: a content_units-rebuilding migration can
   // silently break the linkage — verify (and rebuild) before serving.
   await ftsSelfHeal();
+  await translationsSelfHeal();
 
   // Worker pool: N single-threaded worker processes (see serve.rs) — the
   // pool is what parallelizes extraction/transcription/embedding across
@@ -195,6 +197,10 @@ async function main(): Promise<void> {
     },
   });
   dispatcher.start();
+
+  // Cross-lingual backfill for enabled languages with untranslated
+  // units. Never awaited — boot must not block on backend config.
+  void scheduleTranslationBackfill();
 
   const shutdown = async () => {
     console.log("[mentro] shutting down");

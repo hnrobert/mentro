@@ -28,6 +28,18 @@ export function llmConfig(): LlmConfig | null {
   return { baseUrl, apiKey, model };
 }
 
+/** LLM endpoint for translation: dedicated MENTRO_TRANSLATE_* trio,
+ *  falling back to the assistant's MENTRO_LLM_* when unset. */
+export function translateLlmConfig(): LlmConfig | null {
+  const baseUrl = (process.env.MENTRO_TRANSLATE_BASE_URL ?? "")
+    .trim()
+    .replace(/\/+$/, "");
+  const apiKey = (process.env.MENTRO_TRANSLATE_API_KEY ?? "").trim();
+  const model = (process.env.MENTRO_TRANSLATE_MODEL ?? "").trim();
+  if (baseUrl && apiKey && model) return { baseUrl, apiKey, model };
+  return llmConfig();
+}
+
 /** Human-readable hint for the "not configured" error. */
 export const LLM_ENV_HINT =
   "set MENTRO_LLM_BASE_URL, MENTRO_LLM_API_KEY and MENTRO_LLM_MODEL";

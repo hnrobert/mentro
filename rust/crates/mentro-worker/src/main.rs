@@ -11,6 +11,7 @@ mod serve;
 mod shell;
 mod tools;
 mod transcribe;
+mod translate;
 mod unpack;
 mod watch;
 

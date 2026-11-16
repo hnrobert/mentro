@@ -1,41 +1,61 @@
 import { AppDataSource } from "../db/data-source";
-import { UnitEmbedding } from "../db/entities";
+import { UnitEmbedding, UnitTranslationEmbedding } from "../db/entities";
 import { onIndexChanged } from "../bus";
 import type { WorkerClient } from "../worker/client";
 
 /** In-memory vector table for brute-force cosine. The sidecar emits
  *  normalized vectors, so cosine == dot. Invalidated on index changes
  *  (extract/transcribe/embed all publish); corpus-scale sizes make a
- *  full reload cheap — see docs/search-evaluation.md for the ceiling. */
+ *  full reload cheap — see docs/search-evaluation.md for the ceiling.
+ *
+ * Two caches: original-language vectors (byUnit) and translation
+ *  vectors (byUnitLang, key `${unitId} ${lang}`). nearestUnits scores
+ *  BOTH and merges per unit — a doc matches in any language. */
 
 interface Cache {
   byUnit: Map<string, Float32Array>;
   assetByUnit: Map<string, string>;
+  byUnitLang: Map<string, Float32Array>;
+  assetByUnitLang: Map<string, string>;
   loaded: Promise<void> | null;
 }
 
 const cache: Cache = {
   byUnit: new Map(),
   assetByUnit: new Map(),
+  byUnitLang: new Map(),
+  assetByUnitLang: new Map(),
   loaded: null,
 };
 
 onIndexChanged(() => {
   cache.byUnit.clear();
+  cache.byUnitLang.clear();
   cache.loaded = null;
 });
 
 function load(): Promise<void> {
   cache.loaded ??= (async () => {
-    const rows = await AppDataSource.getRepository(UnitEmbedding).find();
+    const [rows, tRows] = await Promise.all([
+      AppDataSource.getRepository(UnitEmbedding).find(),
+      AppDataSource.getRepository(UnitTranslationEmbedding).find(),
+    ]);
     const byUnit = new Map<string, Float32Array>();
     const assets = new Map<string, string>();
     for (const row of rows) {
       byUnit.set(row.unitId, decodeVector(row.vector));
       assets.set(row.unitId, row.assetId);
     }
+    const byUnitLang = new Map<string, Float32Array>();
+    const tAssets = new Map<string, string>();
+    for (const row of tRows) {
+      byUnitLang.set(`${row.unitId} ${row.lang}`, decodeVector(row.vector));
+      tAssets.set(`${row.unitId} ${row.lang}`, row.assetId);
+    }
     cache.byUnit = byUnit;
     cache.assetByUnit = assets;
+    cache.byUnitLang = byUnitLang;
+    cache.assetByUnitLang = tAssets;
   })();
   return cache.loaded;
 }
@@ -61,6 +81,7 @@ export function encodeVector(values: Float32Array): Uint8Array {
 
 export function invalidateEmbeddingCache(): void {
   cache.byUnit.clear();
+  cache.byUnitLang.clear();
   cache.loaded = null;
 }
 
@@ -85,6 +106,35 @@ export async function storeAssetEmbeddings(
 
 export async function dropAssetEmbeddings(assetId: string): Promise<void> {
   await AppDataSource.getRepository(UnitEmbedding).delete({ assetId });
+  await AppDataSource.getRepository(UnitTranslationEmbedding).delete({
+    assetId,
+  });
+  invalidateEmbeddingCache();
+}
+
+/** Persist translation vectors (replacing previous ones per key). */
+export async function storeTranslationEmbeddings(
+  entries: Array<{
+    unitId: string;
+    lang: string;
+    assetId: string;
+    vector: Float32Array;
+  }>,
+): Promise<void> {
+  if (entries.length === 0) return;
+  const repo = AppDataSource.getRepository(UnitTranslationEmbedding);
+  await repo.delete(
+    entries.map((e) => ({ unitId: e.unitId, lang: e.lang })) as never[],
+  );
+  await repo.insert(
+    entries.map((e) => ({
+      unitId: e.unitId,
+      lang: e.lang,
+      assetId: e.assetId,
+      dim: e.vector.length,
+      vector: encodeVector(e.vector),
+    })),
+  );
   invalidateEmbeddingCache();
 }
 
@@ -117,16 +167,27 @@ export async function nearestUnits(
     )) as Array<{ id: string }>;
     allowed = new Set(rows.map((r) => r.id));
   }
-  const scored: Array<{ unitId: string; score: number }> = [];
+  const scored = new Map<string, { unitId: string; score: number }>();
+  const bump = (unitId: string, score: number): void => {
+    const cur = scored.get(unitId);
+    if (!cur || score > cur.score) scored.set(unitId, { unitId, score });
+  };
   for (const [unitId, vec] of cache.byUnit) {
     if (allowed && !allowed.has(cache.assetByUnit.get(unitId) ?? "")) continue;
     let dot = 0;
     const n = Math.min(vec.length, query.length);
     for (let i = 0; i < n; i++) dot += vec[i] * query[i];
-    scored.push({ unitId, score: dot });
+    bump(unitId, dot);
   }
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, limit);
+  for (const [key, vec] of cache.byUnitLang) {
+    const unitId = key.slice(0, key.lastIndexOf(" "));
+    if (allowed && !allowed.has(cache.assetByUnitLang.get(key) ?? "")) continue;
+    let dot = 0;
+    const n = Math.min(vec.length, query.length);
+    for (let i = 0; i < n; i++) dot += vec[i] * query[i];
+    bump(unitId, dot);
+  }
+  return [...scored.values()].sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
 /** Embed texts through the worker (sidecar container). Empty result

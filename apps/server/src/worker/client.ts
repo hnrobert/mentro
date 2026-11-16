@@ -10,6 +10,7 @@ import {
   RequestSchema,
   ScanRequestSchema,
   TranscribeRequestSchema,
+  TranslateRequestSchema,
   UnwatchRequestSchema,
   WatchRequestSchema,
   WorkerFrameSchema,
@@ -17,6 +18,7 @@ import {
   type ReadyMessage,
   type Request,
   type Response,
+  type TranslateRequest,
   type WorkerFrame,
 } from "@mentro/protocol";
 
@@ -253,6 +255,18 @@ export class WorkerClient {
   async embed(texts: string[], timeoutMs?: number): Promise<Response> {
     return this.request(
       { case: "embed", value: create(EmbedRequestSchema, { texts }) },
+      timeoutMs,
+    );
+  }
+
+  /** Batch translation (worker is a pure executor — backend config and
+   *  credentials ride along per call; they never persist in jobs). */
+  async translate(
+    fields: TranslateRequest,
+    timeoutMs?: number,
+  ): Promise<Response> {
+    return this.request(
+      { case: "translate", value: create(TranslateRequestSchema, fields) },
       timeoutMs,
     );
   }

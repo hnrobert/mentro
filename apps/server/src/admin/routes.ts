@@ -9,7 +9,18 @@ import {
   UserGroup,
   UserGroupMember,
 } from "../db/entities";
-import { getSettings, updateSettings } from "../settings";
+import {
+  getSettings,
+  maskSettings,
+  targetLangsOf,
+  updateSettings,
+  type Settings,
+} from "../settings";
+import {
+  enqueueTranslateJob,
+  scheduleTranslationBackfill,
+  translateStatus,
+} from "../translate/service";
 import { adminGuard, authGuard } from "../auth/guards";
 import { hashPassword } from "../auth/password";
 import { revokeAllSessions } from "../auth/tokens";
@@ -105,16 +116,50 @@ export function registerAdminRoutes(
     },
   );
 
-  app.get("/api/admin/settings", guarded, async () => getSettings());
+  // Masked view: credential values only show whether they are set.
+  app.get("/api/admin/settings", guarded, async () =>
+    maskSettings(await getSettings()),
+  );
 
-  app.patch<{ Body: { allowRegistration?: boolean } }>(
+  app.patch<{ Body: Partial<Settings> }>(
     "/api/admin/settings",
     guarded,
     async (request) => {
-      const { allowRegistration } = request.body ?? {};
-      return updateSettings(
-        allowRegistration === undefined ? {} : { allowRegistration },
+      const before = await getSettings();
+      const after = await updateSettings(request.body ?? {});
+      // Newly enabled languages start their incremental backfill right
+      // away (existing languages are untouched).
+      const added = after.translateEnabledLangs.filter(
+        (l) => !before.translateEnabledLangs.includes(l),
       );
+      if (added.length > 0) {
+        void scheduleTranslationBackfill();
+      }
+      return maskSettings(after);
+    },
+  );
+
+  // --- translation control (settings page progress + manual run) ---
+
+  app.get("/api/admin/translate/status", guarded, async () =>
+    translateStatus(),
+  );
+
+  app.post<{ Body: { lang?: string } }>(
+    "/api/admin/translate/run",
+    guarded,
+    async (request) => {
+      const lang = (request.body?.lang ?? "").trim();
+      if (lang) {
+        await enqueueTranslateJob({ lang });
+      } else {
+        // No lang: kick every enabled language.
+        const settings = await getSettings();
+        for (const l of targetLangsOf(settings)) {
+          await enqueueTranslateJob({ lang: l });
+        }
+      }
+      return { ok: true };
     },
   );
 

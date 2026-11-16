@@ -44,7 +44,59 @@ message Request {
     TranscribeRequest transcribe = 13;
     EmbedRequest embed = 14;
     PackRequest pack = 15;
+    TranslateRequest translate = 16;
   }
+}
+
+// Translate text batches. The worker is a pure HTTP executor: the
+// server resolves policy (backend chain, glossary, pacing) and passes
+// everything per request — credentials never persist in job payloads.
+message TranslateRequest {
+  repeated string texts = 1; // order-preserving; titles/texts flattened
+  string source_lang = 2; // hint ("zh"|"en"|...); empty = auto-detect
+  string target_lang = 3; // BCP-47-ish short code ("zh","en","ja",...)
+  string system_prompt = 4; // LLM backend only; glossary baked in here
+  TranslateBackend backend = 5;
+}
+
+// One configured backend; exactly one kind is set per request.
+message TranslateBackend {
+  oneof kind {
+    TranslateLlm llm = 1;
+    TranslateDeepl deepl = 2;
+    TranslateBaidu baidu = 3;
+    TranslateGoogle google = 4;
+    TranslateLibre libre = 5;
+  }
+}
+
+message TranslateLlm {
+  string base_url = 1; // OpenAI-compatible, includes /vN
+  string api_key = 2;
+  string model = 3;
+  // Optional JSON object merged into the request body — provider
+  // switches like {"thinking":{"type":"disabled"}} for reasoning
+  // models (thinking burns the token budget before the answer).
+  string extra_json = 4;
+}
+
+message TranslateDeepl {
+  string key = 1; // free keys select the api-free host server-side
+  bool pro = 2;
+}
+
+message TranslateBaidu {
+  string appid = 1;
+  string key = 2;
+}
+
+message TranslateGoogle {
+  string key = 1;
+}
+
+message TranslateLibre {
+  string url = 1; // self-hosted base, e.g. http://libre:5000
+  string key = 2; // optional when the instance needs one
 }
 
 // Expand an uploaded archive into dest_dir (asset pool flow). Security:
@@ -191,6 +243,10 @@ message PackResult {
   string path = 1; // artifact path relative to the data dir
 }
 
+message TranslateResult {
+  repeated string translations = 1; // one per request text, same order
+}
+
 enum EExportFormat {
   E_EXPORT_FORMAT_UNSPECIFIED = 0;
   E_EXPORT_FORMAT_PDF = 1;
@@ -220,6 +276,7 @@ enum ECapability {
   E_CAPABILITY_UNPACK = 12;
   E_CAPABILITY_TRANSCRIBE = 13;
   E_CAPABILITY_EMBED = 14;
+  E_CAPABILITY_TRANSLATE = 15;
 }
 
 // Unified reply: echoes the request id; fills the matching result on ok,
@@ -238,6 +295,7 @@ message Response {
     TranscribeResult transcribe_result = 16;
     EmbedResult embed_result = 17;
     PackResult pack_result = 18;
+    TranslateResult translate_result = 19;
   }
 }
 

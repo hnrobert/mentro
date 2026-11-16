@@ -1,7 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { AppDataSource } from "../db/data-source";
 import { ftsMatchExpr } from "../search/segment";
-import { ftsSearch, type SearchHit } from "../search/fts";
+import {
+  ftsSearch,
+  ftsSearchTranslations,
+  type SearchHit,
+} from "../search/fts";
 import { embedTexts, nearestUnits } from "../search/embeddings";
 import type { WorkerClient } from "../worker/client";
 import { readableAssetIds } from "../auth/perm";
@@ -48,7 +52,10 @@ export async function hybridSearch(
 ): Promise<SearchHit[]> {
   const readable = opts.readable; // undefined = no ACL restriction (admin)
   const filenameOnly = opts.scope === "filename";
-  const [ftsHits, semantic] = await Promise.all([
+  // Cross-lingual leg: translations have no file_name, so filename-only
+  // scope stays originals-only.
+  const runTranslations = mode !== "semantic" && !filenameOnly;
+  const [ftsHits, translationHits, semantic] = await Promise.all([
     mode === "semantic"
       ? Promise.resolve([])
       : ftsSearch(
@@ -59,6 +66,18 @@ export async function hybridSearch(
           opts.groups,
           readable,
         ),
+    runTranslations
+      ? ftsSearchTranslations(
+          // Translation rows carry title+text only — same columns the
+          // content scope filters; everywhere keeps the bare expr.
+          opts.scope === "content"
+            ? `{title text} : ${ftsMatchExpr(q)}`
+            : ftsMatchExpr(q),
+          limit,
+          opts.groups,
+          readable,
+        )
+      : Promise.resolve([]),
     // Filename scope is FTS-only: unit embeddings carry no filename
     // signal, so semantic hits would leak content matches straight
     // through the filter.
@@ -78,6 +97,28 @@ export async function hybridSearch(
       viaFts: true,
       viaSem: false,
     });
+  });
+  // Translation leg: same RRF formula; a translated match displays the
+  // translated snippet (it contains the query terms in the user's
+  // language — that is the whole point of cross-lingual search).
+  translationHits.forEach((hit, rank) => {
+    const contribution = 1 / (60 + 1 + rank);
+    const translated = {
+      lang: hit.lang,
+      snippet: (hit.snippet ?? "").replaceAll("[", "").replaceAll("]", ""),
+    };
+    const existing = merged.get(hit.unitId);
+    if (existing) {
+      existing.score += contribution;
+      existing.hit = { ...existing.hit, translated };
+    } else {
+      merged.set(hit.unitId, {
+        hit: { ...hit, translated },
+        score: contribution,
+        viaFts: false,
+        viaSem: false,
+      });
+    }
   });
 
   const semOnly = semantic.filter((s) => !merged.has(s.unitId));

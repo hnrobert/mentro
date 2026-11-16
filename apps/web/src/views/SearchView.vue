@@ -53,6 +53,7 @@ interface ServerHit {
   assetPath: string;
   kind: string;
   groupId?: string | null;
+  translated?: { lang: string; snippet: string };
 }
 
 interface SuggestHit {
@@ -933,6 +934,16 @@ function runSuggestedQuery(q: string): void {
             >
             <template v-else>{{ part.text }}</template>
           </template>
+        </p>
+        <p
+          v-if="hit.translated"
+          class="mt-1 line-clamp-2 rounded bg-muted/50 px-2 py-1 text-xs text-muted-foreground"
+          :title="`命中 ${hit.translated.lang} 译文`"
+        >
+          <span class="mr-1 font-medium text-foreground"
+            >译·{{ hit.translated.lang }}</span
+          >
+          {{ hit.translated.snippet }}
         </p>
         <p class="mt-1 truncate font-mono text-[11px] text-muted-foreground">
           {{ hit.assetPath }}

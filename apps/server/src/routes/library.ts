@@ -5,8 +5,15 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { ulid } from "ulid";
 import { AppDataSource } from "../db/data-source";
-import { Asset, ContentUnit, Group, Job } from "../db/entities";
-import { ftsDeleteAsset } from "../search/fts";
+import {
+  Asset,
+  ContentUnit,
+  Group,
+  Job,
+  UnitTranslation,
+  UnitTranslationEmbedding,
+} from "../db/entities";
+import { ftsDeleteAsset, ftsDeleteTranslationsByAsset } from "../search/fts";
 import { logRemoved, logUpserted, unitIdsOfAsset } from "../indexbundle";
 import { serializedTx } from "../db/tx";
 import { publish } from "../bus";
@@ -236,7 +243,12 @@ export function registerLibraryRoutes(app: FastifyInstance) {
       }
       await serializedTx(async (m) => {
         await ftsDeleteAsset(asset.id, m);
+        await ftsDeleteTranslationsByAsset(asset.id, m);
         await logRemoved(await unitIdsOfAsset(asset.id, m), m);
+        await m.getRepository(UnitTranslation).delete({ assetId: asset.id });
+        await m
+          .getRepository(UnitTranslationEmbedding)
+          .delete({ assetId: asset.id });
         await m.getRepository(ContentUnit).delete({ assetId: asset.id });
         await m.getRepository(Job).delete({ assetId: asset.id });
         await m.getRepository(Asset).delete({ id: asset.id });

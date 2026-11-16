@@ -39,6 +39,11 @@ const router = createRouter({
       name: "settings-groups",
       component: () => import("@/views/SettingsView.vue"),
     },
+    {
+      path: "/settings/translation",
+      name: "settings-translation",
+      component: () => import("@/views/SettingsView.vue"),
+    },
   ],
 });
 

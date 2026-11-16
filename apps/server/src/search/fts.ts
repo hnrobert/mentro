@@ -54,6 +54,147 @@ export async function ftsDeleteAsset(
   }
 }
 
+// --- translations_fts (cross-lingual leg) ----------------------------------
+// Keyed by its own rowid with unit_id/lang as UNINDEXED columns — no
+// content_units.rowid linkage, so table-rebuilding migrations cannot
+// silently break it (unlike units_fts; see ftsSelfHeal).
+
+export interface TranslationRow {
+  unitId: string;
+  lang: string;
+  title: string;
+  text: string;
+}
+
+export async function ftsReplaceTranslations(
+  rows: TranslationRow[],
+  q: Q = defaultQ,
+): Promise<void> {
+  for (const r of rows) {
+    if (!r.text && !r.title) continue;
+    await q.query(
+      `DELETE FROM translations_fts WHERE unit_id = ? AND lang = ?`,
+      [r.unitId, r.lang],
+    );
+    await q.query(
+      `INSERT INTO translations_fts (title, text, unit_id, lang) VALUES (?, ?, ?, ?)`,
+      [segment(r.title), segment(r.text), r.unitId, r.lang],
+    );
+  }
+}
+
+export async function ftsDeleteTranslationsByAsset(
+  assetId: string,
+  q: Q = defaultQ,
+): Promise<void> {
+  await q.query(
+    `DELETE FROM translations_fts WHERE unit_id IN (SELECT id FROM content_units WHERE asset_id = ?)`,
+    [assetId],
+  );
+}
+
+/** SearchHit plus the translation that matched. */
+export interface TranslationSearchHit extends SearchHit {
+  lang: string;
+}
+
+export async function ftsSearchTranslations(
+  matchExpr: string,
+  limit = 50,
+  groups?: Set<string>,
+  readable?: Set<string>,
+): Promise<TranslationSearchHit[]> {
+  if (!matchExpr) return [];
+  let groupSql = "";
+  const params: unknown[] = [matchExpr];
+  if (groups && groups.size > 0) {
+    const ids = [...groups].filter((g) => g !== "__ungrouped__");
+    const wantsUngrouped = groups.has("__ungrouped__");
+    const clauses: string[] = [];
+    if (ids.length > 0) {
+      clauses.push(`a.group_id IN (${ids.map(() => "?").join(",")})`);
+      params.push(...ids);
+    }
+    if (wantsUngrouped) clauses.push("a.group_id IS NULL");
+    groupSql = ` AND (${clauses.join(" OR ")})`;
+  }
+  let readableSql = "";
+  const readableParams: unknown[] = [];
+  if (readable) {
+    readableSql = ` AND cu.asset_id IN (${[...readable].map(() => "?").join(",") || "''"})`;
+    readableParams.push(...[...readable]);
+  }
+  const rows = await AppDataSource.query(
+    `SELECT tf.unit_id, tf.lang,
+            cu.asset_id, cu.ordinal, cu.unit_type, cu.title,
+            a.path AS asset_path, a.kind, a.group_id,
+            snippet(translations_fts, 1, '[', ']', '…', 12) AS snip
+     FROM translations_fts tf
+     JOIN content_units cu ON cu.id = tf.unit_id
+     JOIN assets a ON a.id = cu.asset_id
+     WHERE translations_fts MATCH ?${groupSql}${readableSql}
+     ORDER BY rank
+     LIMIT ?`,
+    [...params, ...readableParams, limit],
+  );
+  return rows.map((r: Record<string, unknown>) => ({
+    unitId: r.unit_id as string,
+    assetId: r.asset_id as string,
+    ordinal: r.ordinal as number,
+    unitType: r.unit_type as string,
+    title: (r.title as string) ?? null,
+    snippet: (r.snip as string) ?? null,
+    fileName:
+      String(r.asset_path ?? "")
+        .split("/")
+        .pop() ?? "",
+    assetPath: r.asset_path as string,
+    kind: r.kind as string,
+    groupId: (r.group_id as string | null) ?? null,
+    lang: r.lang as string,
+  }));
+}
+
+/** Boot-time integrity check for the translations mirror (same idea as
+ *  ftsSelfHeal, but the count comparison is the only drift signal
+ *  needed — there is no rowid linkage to break). The virtual table is
+ *  ensured here (idempotent): FTS5 tables are outside entity metadata,
+ *  so migrations cannot express them — repo policy is script-generated
+ *  migrations only, hence runtime ensure instead of hand-written DDL. */
+export async function translationsSelfHeal(): Promise<void> {
+  await AppDataSource.query(
+    `CREATE VIRTUAL TABLE IF NOT EXISTS "translations_fts" USING fts5(title, text, unit_id UNINDEXED, lang UNINDEXED)`,
+  );
+  const [{ ok }] = (await AppDataSource.query(
+    `SELECT COUNT(*) AS ok FROM unit_translations WHERE status = 'ok' AND COALESCE(text,'') != ''`,
+  )) as Array<{ ok: number }>;
+  const [{ rows }] = (await AppDataSource.query(
+    `SELECT COUNT(*) AS rows FROM translations_fts`,
+  )) as Array<{ rows: number }>;
+  if (ok === rows) return;
+  console.warn(
+    `[search] translations_fts drift (${rows} rows vs ${ok} translations) — rebuilding`,
+  );
+  await AppDataSource.query(`DELETE FROM translations_fts`);
+  const all = (await AppDataSource.query(
+    `SELECT unit_id, lang, title, text FROM unit_translations WHERE status = 'ok'`,
+  )) as Array<{
+    unit_id: string;
+    lang: string;
+    title: string | null;
+    text: string | null;
+  }>;
+  await ftsReplaceTranslations(
+    all.map((r) => ({
+      unitId: r.unit_id,
+      lang: r.lang,
+      title: r.title ?? "",
+      text: r.text ?? "",
+    })),
+  );
+  console.log(`[search] rebuilt translations_fts (${all.length} rows)`);
+}
+
 /** The FTS mirror is keyed by content_units.rowid — a linkage that any
  *  migration rebuilding content_units silently breaks (sqlite ALTER =
  *  drop + copy + rename, which reassigns rowids; every search then
@@ -104,6 +245,9 @@ export interface SearchHit {
   assetPath: string;
   kind: string;
   groupId: string | null;
+  /** Set when the unit matched (at least partly) through its
+   *  translation: snippet shown to the user is the translated text. */
+  translated?: { lang: string; snippet: string };
 }
 
 export async function ftsSearch(
