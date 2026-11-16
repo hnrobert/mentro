@@ -31,7 +31,10 @@ import { ensurePoolSource, mountEnvSources } from "./pool";
 import { registerUploadRoutes } from "./routes/upload";
 import { initSegmenter } from "./search/segment";
 import { ftsSelfHeal, translationsSelfHeal } from "./search/fts";
-import { scheduleTranslationBackfill } from "./translate/service";
+import {
+  scheduleTranslationBackfill,
+  startTranslationSweeper,
+} from "./translate/service";
 import { WorkerPool, defaultPoolSize } from "./worker/pool";
 import { Dispatcher } from "./queue/dispatcher";
 import { clientCount, publish } from "./bus";
@@ -210,6 +213,9 @@ async function main(): Promise<void> {
   // Cross-lingual backfill for enabled languages with untranslated
   // units. Never awaited — boot must not block on backend config.
   void scheduleTranslationBackfill();
+  // Requeue stalled backfills (failed-out jobs leave the pipeline dead
+  // until a restart; the sweeper probes once per sweep, not hammered).
+  startTranslationSweeper();
 
   const shutdown = async () => {
     console.log("[mentro] shutting down");

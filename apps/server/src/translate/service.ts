@@ -253,7 +253,7 @@ async function translateBatch(
   lang: string,
   worker: WorkerClient,
   settings: Settings,
-): Promise<string[]> {
+): Promise<(string | null)[]> {
   const texts = batch.map(({ unit, field }) =>
     field === "title"
       ? (unit.title ?? "")
@@ -284,7 +284,10 @@ async function translateBatch(
   for (const delay of DELAYS_MS) {
     if (delay > 0) await new Promise((r) => setTimeout(r, delay));
     try {
-      const resp = await worker.translate(req, 180_000);
+      // Must exceed the worker's internal LLM read timeout (300s) —
+      // killing the RPC early aborts streams that would have finished
+      // ("worker request timed out" burned every retry otherwise).
+      const resp = await worker.translate(req, 360_000);
       if (!resp.ok || resp.result?.case !== "translateResult") {
         throw new Error(resp.error?.message ?? "translate rpc failed");
       }
@@ -297,13 +300,96 @@ async function translateBatch(
       lastErr = err;
     }
   }
+  // Batch keeps failing (a poison batch: some content reliably makes
+  // the model return garbage). Split to size 1 — healthy segments
+  // survive, poison segments surface individually.
+  return translateSolo(batch, backend, lang, worker, settings);
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+/** Per-segment fallback; returns null-padded results and marks the
+ *  hopeless segments skipped so the backfill converges past them. */
+async function translateSolo(
+  batch: Segment[],
+  backend: ResolvedBackend,
+  lang: string,
+  worker: WorkerClient,
+  settings: Settings,
+): Promise<(string | null)[]> {
+  console.warn(
+    `[translate] batch failed (${backend.name}); splitting ${batch.length} segments`,
+  );
+  const out: (string | null)[] = [];
+  const repo = AppDataSource.getRepository(UnitTranslation);
+  for (let i = 0; i < batch.length; i++) {
+    const seg = batch[i];
+    const text =
+      seg.field === "title"
+        ? (seg.unit.title ?? "")
+        : (seg.unit.text ?? "").slice(0, TEXT_CAP);
+    const source = detectScript(text) ?? "";
+    const systemPrompt =
+      backend.name === "llm"
+        ? buildTranslatePrompt(source, lang, 1, settings.translateGlossary)
+        : "";
+    let ok: string | null = null;
+    for (const delay of [0, 2_000]) {
+      if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+      await pacer.acquire(1);
+      try {
+        const resp = await worker.translate(
+          create(TranslateRequestSchema, {
+            texts: [text],
+            sourceLang: source,
+            targetLang: lang,
+            systemPrompt,
+            backend: backend.build(),
+          }),
+          360_000,
+        );
+        if (
+          resp.ok &&
+          resp.result?.case === "translateResult" &&
+          resp.result.value.translations.length === 1
+        ) {
+          ok = resp.result.value.translations[0];
+          break;
+        }
+      } catch {
+        /* try next delay */
+      }
+    }
+    if (ok !== null) {
+      out.push(ok);
+      continue;
+    }
+    // Poison segment: record it as skipped so the missing-count query
+    // converges and the chain proceeds past it.
+    console.warn(
+      `[translate] poison segment skipped (${seg.unit.id}.${seg.field})`,
+    );
+    await repo.upsert(
+      {
+        unitId: seg.unit.id,
+        lang,
+        assetId: seg.unit.asset_id,
+        sourceLang: detectScript(text),
+        title: null,
+        text: null,
+        status: "skipped",
+        backend: "poison",
+      },
+      ["unitId", "lang"],
+    );
+    out.push(null);
+  }
+  return out;
 }
 
 /** Store translations + FTS rows + embeddings for one finished batch. */
 async function persistBatch(
   batch: Array<{ unit: UnitRow; field: "title" | "text" }>,
-  translations: string[],
+  translations: Array<string | null>,
   lang: string,
   backendName: string,
   worker: WorkerClient,
@@ -314,6 +400,8 @@ async function persistBatch(
     { title: string | null; text: string | null }
   >();
   batch.forEach((seg, i) => {
+    // null = poison segment (already recorded skipped) — drop it.
+    if (translations[i] === null) return;
     const cur = byUnit.get(seg.unit.id) ?? { title: null, text: null };
     if (seg.field === "title") cur.title = translations[i];
     else cur.text = translations[i];
@@ -385,6 +473,62 @@ export async function scheduleTranslationBackfill(): Promise<void> {
   } catch (err) {
     console.warn(`[translate] backfill scheduling failed: ${String(err)}`);
   }
+}
+
+/** Stalled-backlog reaper. Failed-out jobs (3 attempts exhausted, e.g.
+ *  a flaky gateway evening) leave NOTHING running — until a restart or
+ *  manual click the pipeline sits dead. This sweeper requeues a
+ *  language when it has untranslated units, no active job, and its
+ *  last job has been quiet for RETRY_QUIET_MS (so a down gateway is
+ *  probed once per interval, not hammered). */
+const SWEEP_MS = 10 * 60 * 1000;
+const RETRY_QUIET_MS = 10 * 60 * 1000;
+
+export function startTranslationSweeper(): void {
+  const sweep = async (): Promise<void> => {
+    try {
+      const settings = await getSettings();
+      if (resolveBackends(settings).length === 0) return;
+      const jobRepo = AppDataSource.getRepository(Job);
+      const active = await jobRepo
+        .createQueryBuilder("j")
+        .where("j.kind = :kind", { kind: "translate" })
+        .andWhere("j.status IN (:...st)", { st: ["pending", "running"] })
+        .getMany();
+      const activeLangs = new Set(
+        active.map(
+          (j) => (JSON.parse(j.payload ?? "{}") as TranslatePayload).lang || "",
+        ),
+      );
+      for (const lang of targetLangsOf(settings)) {
+        if (activeLangs.has(lang)) continue;
+        const missing = await countMissing(lang);
+        if (missing === 0) continue;
+        const last = await jobRepo
+          .createQueryBuilder("j")
+          .where("j.kind = :kind", { kind: "translate" })
+          .andWhere("j.payload LIKE :p", { p: `%"lang":"${lang}"%` })
+          .orderBy("j.updated_at", "DESC")
+          .getOne();
+        if (
+          last &&
+          Date.now() - new Date(last.updatedAt).getTime() < RETRY_QUIET_MS
+        ) {
+          continue;
+        }
+        console.log(
+          `[translate] sweeper: requeue ${lang} (${missing} missing, last job ${last?.status ?? "none"})`,
+        );
+        await enqueueTranslateJob({ lang });
+      }
+    } catch (err) {
+      console.warn(`[translate] sweeper failed: ${String(err)}`);
+    }
+  };
+  const timer = setInterval(() => void sweep(), SWEEP_MS);
+  timer.unref();
+  // First sweep shortly after boot (lets the boot backfill settle first).
+  setTimeout(() => void sweep(), 2 * 60 * 1000).unref();
 }
 
 /** Settings-page progress: per-language counts + job states. */

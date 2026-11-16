@@ -17,6 +17,10 @@ use crate::{
 };
 
 const TIMEOUT: Duration = Duration::from_secs(120);
+/// LLM streams can stall-then-resume on flaky gateways; a tight body
+/// read timeout kills alive generations (observed as "llm body read:
+/// timed out" bursts that burned every retry).
+const LLM_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Batch cap — the server batches smaller (8 for llm, 32 for APIs);
 /// this is a hard stop against runaway payloads.
@@ -195,7 +199,7 @@ fn llm_translate(
         }
     }
     let resp = ureq::post(&format!("{base}/chat/completions"))
-        .timeout(TIMEOUT)
+        .timeout(LLM_TIMEOUT)
         .set("authorization", &format!("Bearer {}", cfg.api_key))
         .send_json(body)
         .map_err(|e| retryable(format!("llm translate: {e}")))?;
