@@ -249,7 +249,10 @@ interface LangStatus {
   lang: string;
   total: number;
   translated: number;
+  skipped: number;
+  done: number;
   missing: number;
+  complete: boolean;
   pending: boolean;
   running: boolean;
 }
@@ -723,7 +726,8 @@ function moveBackend(i: number, dir: -1 | 1): void {
           </Button>
         </div>
 
-        <!-- Progress -->
+        <!-- Progress. done = translated + same-source skips, so the bar
+             reaches 100% and completed languages show an explicit check. -->
         <div>
           <h3 class="mb-2 text-sm font-semibold">Progress</h3>
           <div class="space-y-2">
@@ -731,24 +735,46 @@ function moveBackend(i: number, dir: -1 | 1): void {
               v-for="l in tstatus"
               :key="l.lang"
               class="rounded border px-3 py-2 text-xs"
+              :class="l.complete ? 'border-primary/30' : ''"
             >
               <div class="mb-1 flex items-center justify-between">
-                <span class="font-medium">{{ l.lang }}</span>
+                <span class="flex items-center gap-1.5 font-medium">
+                  {{ l.lang }}
+                  <span
+                    v-if="l.complete"
+                    class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary"
+                    >done</span
+                  >
+                </span>
                 <span class="text-muted-foreground">
-                  {{ l.translated }}/{{ l.total }}
-                  <span v-if="l.running" class="ml-1 animate-pulse text-primary"
-                    >running…</span
-                  >
-                  <span v-else-if="l.pending" class="ml-1 text-muted-foreground"
-                    >queued</span
-                  >
+                  <template v-if="l.complete">
+                    {{ l.translated }} translated ·
+                    {{ l.skipped }} same-language · up to date
+                  </template>
+                  <template v-else>
+                    {{ l.done }}/{{ l.total }}
+                    <span v-if="l.missing > 0" class="ml-1">
+                      ({{ l.missing }} to go)
+                    </span>
+                    <span
+                      v-if="l.running"
+                      class="ml-1 animate-pulse text-primary"
+                      >running…</span
+                    >
+                    <span
+                      v-else-if="l.pending"
+                      class="ml-1 text-muted-foreground"
+                      >queued</span
+                    >
+                  </template>
                 </span>
               </div>
               <div class="h-1.5 overflow-hidden rounded bg-muted">
                 <div
-                  class="h-full rounded bg-primary transition-all"
+                  class="h-full rounded transition-all"
+                  :class="l.complete ? 'bg-primary/60' : 'bg-primary'"
                   :style="{
-                    width: `${l.total ? Math.round((l.translated / l.total) * 100) : 0}%`,
+                    width: `${l.total ? Math.round((l.done / l.total) * 100) : 0}%`,
                   }"
                 />
               </div>

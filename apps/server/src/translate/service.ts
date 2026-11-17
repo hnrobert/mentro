@@ -531,13 +531,19 @@ export function startTranslationSweeper(): void {
   setTimeout(() => void sweep(), 2 * 60 * 1000).unref();
 }
 
-/** Settings-page progress: per-language counts + job states. */
+/** Settings-page progress: per-language counts + job states. `done`
+ *  counts translated + same-source skips so the bar can reach 100% —
+ *  translated alone never does (every corpus has units whose source
+ *  language IS the target, e.g. English originals need no 'en' row). */
 export async function translateStatus(): Promise<{
   langs: Array<{
     lang: string;
     total: number;
     translated: number;
+    skipped: number;
+    done: number;
     missing: number;
+    complete: boolean;
     pending: boolean;
     running: boolean;
   }>;
@@ -570,16 +576,21 @@ export async function translateStatus(): Promise<{
         `SELECT
            (SELECT COUNT(*) FROM content_units
               WHERE COALESCE(text,'') != '' OR COALESCE(title,'') != '') AS total,
-           (SELECT COUNT(*) FROM unit_translations WHERE lang = ? AND status = 'ok') AS translated`,
-        [lang],
+           (SELECT COUNT(*) FROM unit_translations WHERE lang = ? AND status = 'ok') AS translated,
+           (SELECT COUNT(*) FROM unit_translations WHERE lang = ? AND status = 'skipped') AS skipped`,
+        [lang, lang],
       )
-    )[0] as { total: number; translated: number };
+    )[0] as { total: number; translated: number; skipped: number };
     const missing = await countMissing(lang);
+    const done = Math.min(row.total, row.translated + row.skipped);
     out.push({
       lang,
       total: row.total,
       translated: row.translated,
+      skipped: row.skipped,
+      done,
       missing,
+      complete: missing === 0,
       pending: pendingLangs.has(lang),
       running: runningLangs.has(lang),
     });
