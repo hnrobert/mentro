@@ -2,7 +2,11 @@
  *  pipeline + as-you-type suggestions). */
 
 import type { FastifyInstance } from "fastify";
-import { ftsSearch } from "../search/fts";
+import {
+  ftsSearch,
+  ftsSearchTranslations,
+  type SearchHit,
+} from "../search/fts";
 import type { WorkerClient } from "../worker/client";
 import {
   extractCompletions,
@@ -59,14 +63,50 @@ export async function registerSearchRoutes(
       if (q.length < 1)
         return { terms: [], hits: [] } satisfies SuggestResponse;
       const expr = prefixExpr(q);
-      const hits = expr
-        ? await ftsSearch(
-            expr,
-            20,
-            undefined,
-            await readableSetOf(request.user),
-          )
-        : [];
+      const readable = await readableSetOf(request.user);
+      // Two legs: originals AND translations — an English prefix like
+      // "port" must surface Chinese decks (matched via their en
+      // translations) while typing, not only after Enter.
+      const origPromise: Promise<SearchHit[]> = expr
+        ? ftsSearch(expr, 20, undefined, readable)
+        : Promise.resolve([]);
+      const transPromise: Promise<SearchHit[]> = expr
+        ? ftsSearchTranslations(expr, 10, undefined, readable)
+        : Promise.resolve([]);
+      const [origHits, transHits] = await Promise.all([
+        origPromise,
+        transPromise,
+      ]);
+      // Round-robin interleave (o0, t0, o1, o2, t1, ...) so
+      // translation hits are not buried under 20 original matches —
+      // a Chinese deck must reach the quick-jump slots, not just the
+      // completion pool.
+      const hits: SearchHit[] = [];
+      const seen = new Set<string>();
+      const assets = new Set<string>();
+      const push = (h: SearchHit) => {
+        if (seen.has(h.unitId)) return;
+        // The quick-jump slots (first 3) show DISTINCT files — one
+        // English deck with 20 matching units must not crowd the
+        // Chinese decks out of the dropdown.
+        if (hits.length < 3 && assets.has(h.assetId)) return;
+        seen.add(h.unitId);
+        assets.add(h.assetId);
+        hits.push(h);
+      };
+      for (
+        let i = 0;
+        hits.length < 20 && (i < origHits.length || i < transHits.length);
+        i++
+      ) {
+        if (i < origHits.length) push(origHits[i]!);
+        if (i === 0 || i === 2) {
+          // translation slots: rank 0 and rank 1 of the translation leg
+          const t = (i === 0 ? transHits[0] : transHits[1]) as
+            SearchHit | undefined;
+          if (t) push(t);
+        }
+      }
       const terms = extractCompletions(
         q,
         hits.flatMap((h) => [
