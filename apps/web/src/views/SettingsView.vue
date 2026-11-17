@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
 import { api } from "@/api/client";
@@ -8,6 +8,7 @@ import { GuardedSave } from "vue-guarded-save";
 import { useAuthStore } from "@/stores/auth";
 
 const route = useRoute();
+const router = useRouter();
 const auth = useAuthStore();
 
 interface SourceRow {
@@ -26,7 +27,10 @@ interface UserRow {
   createdAt: string;
 }
 
-const tab = ref<"sources" | "users" | "groups" | "translation">(
+/** The tab IS the route — every settings page has its own URL, so
+ *  refresh/back/forward land on the same tab instead of bouncing to
+ *  the default. Tab buttons navigate; no local tab state to drift. */
+const tab = computed<"sources" | "users" | "groups" | "translation">(() =>
   route.name === "settings-users"
     ? "users"
     : route.name === "settings-groups"
@@ -35,6 +39,10 @@ const tab = ref<"sources" | "users" | "groups" | "translation">(
         ? "translation"
         : "sources",
 );
+
+function navTab(name: string): void {
+  void router.push({ name });
+}
 const sources = ref<SourceRow[]>([]);
 const users = ref<UserRow[]>([]);
 const newSourcePath = ref("");
@@ -410,7 +418,7 @@ function moveBackend(i: number, dir: -1 | 1): void {
       <button
         class="rounded px-3 py-1.5 text-sm transition-colors hover:bg-accent"
         :class="tab === 'sources' ? 'bg-accent font-medium' : ''"
-        @click="tab = 'sources'"
+        @click="navTab('settings-sources')"
       >
         Mounted Directories
       </button>
@@ -418,7 +426,7 @@ function moveBackend(i: number, dir: -1 | 1): void {
         v-if="auth.user?.role === 'super_admin'"
         class="rounded px-3 py-1.5 text-sm transition-colors hover:bg-accent"
         :class="tab === 'users' ? 'bg-accent font-medium' : ''"
-        @click="tab = 'users'"
+        @click="navTab('settings-users')"
       >
         Users
       </button>
@@ -428,7 +436,7 @@ function moveBackend(i: number, dir: -1 | 1): void {
         :class="tab === 'translation' ? 'bg-accent font-medium' : ''"
         @click="
           () => {
-            tab = 'translation';
+            navTab('settings-translation');
             if (!tset) void loadTranslation();
           }
         "
