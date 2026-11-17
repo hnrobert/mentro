@@ -5,6 +5,8 @@ import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
 import { api } from "@/api/client";
 import { GuardedSave } from "vue-guarded-save";
+import { toast } from "vue-sonner";
+import { confirmDialog } from "@/lib/confirm";
 import { useAuthStore } from "@/stores/auth";
 
 const route = useRoute();
@@ -87,7 +89,7 @@ async function addSource(): Promise<void> {
       body: JSON.stringify({ rootPath: p }),
     });
     newSourcePath.value = "";
-    message.value = "Added, scan started";
+    toast.success("Added, scan started");
     await loadSources();
   } catch (err) {
     message.value = String(err);
@@ -100,12 +102,13 @@ async function rescanSource(id: string): Promise<void> {
 }
 
 async function removeSource(id: string): Promise<void> {
-  if (
-    !confirm(
-      "Remove this mount directory? Indexed content will also be removed.",
-    )
-  )
-    return;
+  const ok = await confirmDialog({
+    title: "Remove this mount directory?",
+    description: "Indexed content will also be removed.",
+    confirmText: "Remove",
+    destructive: true,
+  });
+  if (!ok) return;
   await api(`/api/sources/${id}`, { method: "DELETE" });
   await loadSources();
 }
@@ -170,7 +173,7 @@ async function toggleAdmin(u: UserRow, on: boolean): Promise<void> {
 
 async function toggleUser(u: UserRow): Promise<void> {
   if (u.role === "super_admin" && u.enabled) {
-    alert("Cannot disable super admin");
+    toast.error("Cannot disable super admin");
     return;
   }
   await api(`/api/admin/users/${u.id}`, {
@@ -182,10 +185,15 @@ async function toggleUser(u: UserRow): Promise<void> {
 
 async function removeUser(u: UserRow): Promise<void> {
   if (u.id === auth.user?.id) {
-    alert("Cannot delete yourself");
+    toast.error("Cannot delete yourself");
     return;
   }
-  if (!confirm(`Delete user "${u.username}"?`)) return;
+  const ok = await confirmDialog({
+    title: `Delete user "${u.username}"?`,
+    confirmText: "Delete",
+    destructive: true,
+  });
+  if (!ok) return;
   await api(`/api/admin/users/${u.id}`, { method: "DELETE" });
   await loadUsers();
 }
@@ -395,7 +403,7 @@ async function runTranslateNow(): Promise<void> {
       method: "POST",
       body: JSON.stringify({}),
     });
-    message.value = "Queued.";
+    toast.success("Translation queued");
     await refreshTranslateStatus();
   } catch (err) {
     message.value = String(err);

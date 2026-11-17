@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { useCartStore } from "@/stores/cart";
 import { api } from "@/api/client";
@@ -17,9 +17,27 @@ import {
   Upload,
   X,
 } from "lucide-vue-next";
+import { Toaster, toast } from "vue-sonner";
+import { useI18n } from "vue-i18n";
+import { useColorMode } from "@vueuse/core";
+import { ConfirmHost } from "@/lib/confirm";
+import SiteFooter from "@/components/SiteFooter.vue";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
+import { useBreadcrumbs } from "@/composables/useBreadcrumbs";
 
 const auth = useAuthStore();
 const cart = useCartStore();
+const { t } = useI18n();
+const mode = useColorMode({ storageKey: "mentro.theme" });
+const isDark = computed(() => mode.value === "dark");
+const crumbs = useBreadcrumbs();
 const router = useRouter();
 const route = useRoute();
 
@@ -120,6 +138,7 @@ onMounted(() => {
   void auth.restore();
   window.addEventListener("mentro:unauthorized", () => {
     auth.setUser(null);
+    toast.error(t("toast.sessionExpired"));
     router.push({ name: "login" });
   });
   void refreshCount();
@@ -197,7 +216,7 @@ onUnmounted(() => {
           @click="nav('search')"
         >
           <Search class="h-4 w-4 shrink-0" />
-          <span v-if="!collapsedRail">Search</span>
+          <span v-if="!collapsedRail">{{ t("nav.search") }}</span>
         </button>
         <button
           class="flex items-center rounded py-2 text-sm transition-colors hover:bg-accent"
@@ -210,7 +229,7 @@ onUnmounted(() => {
         >
           <Library class="h-4 w-4 shrink-0" />
           <span v-if="!collapsedRail">
-            Library
+            {{ t("nav.library") }}
             <span
               v-if="totalCount !== null"
               class="ml-1 text-xs text-muted-foreground"
@@ -232,7 +251,7 @@ onUnmounted(() => {
           @click="nav('settings-sources')"
         >
           <Settings class="h-4 w-4 shrink-0" />
-          <span v-if="!collapsedRail">Settings</span>
+          <span v-if="!collapsedRail">{{ t("nav.settings") }}</span>
         </button>
       </nav>
 
@@ -267,7 +286,7 @@ onUnmounted(() => {
         >
           <span class="truncate">{{ auth.user.username }}</span>
           <button class="text-destructive hover:underline" @click="signOut">
-            Sign Out
+            {{ t("actions.signOut") }}
           </button>
         </div>
       </div>
@@ -295,10 +314,44 @@ onUnmounted(() => {
           Mentro
         </button>
       </div>
-      <div class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-        <RouterView @library-changed="refreshCount" />
+      <div
+        class="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden"
+      >
+        <!-- Breadcrumbs (library detail / settings pages; search home has none) -->
+        <Breadcrumb v-if="crumbs.length > 0" class="shrink-0 px-4 pt-3">
+          <BreadcrumbList>
+            <template v-for="(c, i) in crumbs" :key="i">
+              <BreadcrumbSeparator v-if="i > 0" class="[&>svg]:size-3" />
+              <BreadcrumbItem>
+                <BreadcrumbLink
+                  v-if="c.to"
+                  :as="RouterLink"
+                  :to="c.to"
+                  class="text-muted-foreground"
+                >
+                  {{ c.label }}
+                </BreadcrumbLink>
+                <BreadcrumbPage v-else class="font-medium">
+                  {{ c.label }}
+                </BreadcrumbPage>
+              </BreadcrumbItem>
+            </template>
+          </BreadcrumbList>
+        </Breadcrumb>
+        <div class="min-h-0 flex-1">
+          <RouterView @library-changed="refreshCount" />
+        </div>
+        <SiteFooter />
       </div>
     </main>
+
+    <Toaster
+      position="top-right"
+      rich-colors
+      close-button
+      :theme="isDark ? 'dark' : 'light'"
+    />
+    <ConfirmHost />
 
     <UploadModal
       v-if="uploadOpen"

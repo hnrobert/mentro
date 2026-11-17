@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from "vue-sonner";
 import { computed, onMounted, ref } from "vue";
 import Button from "@/components/ui/Button.vue";
 import { api } from "@/api/client";
@@ -122,8 +123,12 @@ async function setVisibility(next: "internal" | "public"): Promise<void> {
       }),
     });
     visibility.value = next;
+    toast.success(
+      next === "public" ? "Visibility: public (对外)" : "Visibility: internal",
+    );
   } catch (err) {
     error.value = String(err);
+    toast.error("Failed to update visibility");
   } finally {
     busy.value = false;
   }
@@ -147,8 +152,10 @@ async function addEntry(): Promise<void> {
     });
     newSubject.value = "";
     await load();
+    toast.success("Permission added");
   } catch (err) {
     error.value = String(err);
+    toast.error("Failed to add permission");
   } finally {
     busy.value = false;
   }
@@ -170,8 +177,10 @@ async function removeEntry(id: string): Promise<void> {
       }),
     });
     await load();
+    toast.success("Permission removed");
   } catch (err) {
     error.value = String(err);
+    toast.error("Failed to remove permission");
   } finally {
     busy.value = false;
   }

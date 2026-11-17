@@ -4,6 +4,8 @@ import { useRouter } from "vue-router";
 import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
 import { assistantStream, api, type AssistantSource } from "@/api/client";
+import MarkdownView from "@/components/MarkdownView.vue";
+import { toast } from "vue-sonner";
 import { fetchGroups, type GroupNode } from "@/api/library";
 import {
   BookOpen,
@@ -221,6 +223,7 @@ async function submitSearch(): Promise<void> {
       : "";
   } catch (err) {
     error.value = String(err);
+    toast.error("Search failed");
   } finally {
     searched.value = true;
     busy.value = false;
@@ -442,14 +445,24 @@ const aiLines = computed(() =>
 );
 
 /** Split a text line into plain/citation【i】parts for click-to-jump. */
-function citeParts(line: string): Array<{ text: string; cite?: number }> {
-  const parts: Array<{ text: string; cite?: number }> = [];
-  const re = /【(\d+)】/g;
+/** Split an AI line into cite chips (【n】), bold (**…**) and plain
+ *  text parts — the model may emit concise markdown per its prompt. */
+function citeParts(line: string): Array<{
+  text: string;
+  cite?: number;
+  bold?: boolean;
+}> {
+  const parts: Array<{ text: string; cite?: number; bold?: boolean }> = [];
+  const re = /【(\d+)】|\*\*([^*]+)\*\*/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(line))) {
     if (m.index > last) parts.push({ text: line.slice(last, m.index) });
-    parts.push({ text: m[0], cite: Number(m[1]) });
+    if (m[1] !== undefined) {
+      parts.push({ text: m[0], cite: Number(m[1]) });
+    } else {
+      parts.push({ text: m[2] ?? "", bold: true });
+    }
     last = m.index + m[0].length;
   }
   if (last < line.length) parts.push({ text: line.slice(last) });
@@ -827,7 +840,7 @@ function runSuggestedQuery(q: string): void {
               {{ l.q }}
             </button>
           </div>
-          <p v-else class="whitespace-pre-wrap">
+          <div v-else class="ai-md">
             <template v-for="(part, pi) in citeParts(l.line)" :key="pi">
               <button
                 v-if="part.cite"
@@ -837,9 +850,14 @@ function runSuggestedQuery(q: string): void {
               >
                 {{ part.text }}
               </button>
+              <strong
+                v-else-if="part.bold"
+                class="font-semibold text-foreground"
+                >{{ part.text }}</strong
+              >
               <template v-else>{{ part.text }}</template>
             </template>
-          </p>
+          </div>
         </template>
 
         <!-- sources -->

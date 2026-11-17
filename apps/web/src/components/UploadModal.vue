@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from "vue-sonner";
 import { onMounted, ref } from "vue";
 import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
@@ -61,6 +62,7 @@ async function upload(overwrite = false): Promise<void> {
     setTimeout(() => emit("close"), 1200);
   } catch (err) {
     error.value = String(err);
+    toast.error("Upload failed");
   } finally {
     busy.value = false;
   }
@@ -76,6 +78,7 @@ async function addGroup(): Promise<void> {
     await loadGroups();
   } catch (err) {
     error.value = String(err);
+    toast.error("Upload failed");
   }
 }
 </script>

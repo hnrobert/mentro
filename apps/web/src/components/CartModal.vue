@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from "vue-sonner";
 import { computed, ref } from "vue";
 import Button from "@/components/ui/Button.vue";
 import { api, apiBlobProgress } from "@/api/client";
@@ -144,6 +145,7 @@ async function download(mode: "native" | "original"): Promise<void> {
     emit("close");
   } catch (err) {
     error.value = String(err);
+    toast.error("Export failed");
   } finally {
     busy.value = "";
     progress.value = null;

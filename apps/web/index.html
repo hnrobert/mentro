@@ -4,6 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mentro</title>
+    <script>
+      // Theme flash prevention: apply the stored (or system) dark class
+      // before first paint. Matches @vueuse useColorMode's storageKey.
+      (function () {
+        try {
+          var stored = localStorage.getItem("mentro.theme");
+          var dark =
+            stored === "dark" ||
+            ((!stored || stored === "auto") &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

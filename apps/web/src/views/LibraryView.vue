@@ -2,6 +2,8 @@
 import { Pencil, Plus, Shield, Trash2 } from "lucide-vue-next";
 import PermissionDialog from "@/components/PermissionDialog.vue";
 import { useAuthStore } from "@/stores/auth";
+import { toast } from "vue-sonner";
+import { confirmDialog } from "@/lib/confirm";
 
 const authStore = useAuthStore();
 const permTarget = ref<{
@@ -188,29 +190,38 @@ async function commitRename(): Promise<void> {
 }
 
 async function removeGroup(g: GroupNode): Promise<void> {
-  if (!confirm(`Delete group "${g.name}"? (must be empty)`)) return;
+  const ok = await confirmDialog({
+    title: `Delete group "${g.name}"?`,
+    description: "The group must be empty.",
+    confirmText: "Delete",
+    destructive: true,
+  });
+  if (!ok) return;
   try {
     await deleteGroup(g.id);
     if (selectedGroup.value === g.id) selectedGroup.value = null;
     await loadGroups();
+    toast.success(`Group "${g.name}" deleted`);
   } catch (err) {
-    alert(String(err));
+    toast.error(String(err));
   }
 }
 
 async function removeAsset(a: LibraryAsset): Promise<void> {
-  if (
-    !confirm(
-      `Delete "${a.path.split("/").pop()}"? This removes both the index and the file.`,
-    )
-  )
-    return;
+  const ok = await confirmDialog({
+    title: `Delete "${a.path.split("/").pop()}"?`,
+    description: "This removes both the index and the file.",
+    confirmText: "Delete",
+    destructive: true,
+  });
+  if (!ok) return;
   try {
     await deleteAsset(a.id);
     await Promise.all([loadAssets(), loadGroups()]);
     emit("library-changed");
+    toast.success("File deleted");
   } catch (err) {
-    alert(String(err));
+    toast.error(String(err));
   }
 }
 

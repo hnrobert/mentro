@@ -12,6 +12,7 @@ import {
   Shield,
 } from "lucide-vue-next";
 import PermissionDialog from "@/components/PermissionDialog.vue";
+import MarkdownView from "@/components/MarkdownView.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useCartStore } from "@/stores/cart";
 
@@ -119,6 +120,8 @@ async function load(): Promise<void> {
     );
     asset.value = res.asset;
     units.value = res.units;
+    // Breadcrumb label for App.vue's trail (file name).
+    route.meta.breadcrumb = res.asset.path.split("/").pop() ?? res.asset.id;
     // Deep link (?page=N from search): open at that page and scroll it
     // into view; otherwise show the first page. No history push — the
     // deep link itself IS the first entry.
@@ -569,9 +572,11 @@ onMounted(() => {
                 {{ langName(lang) }}
               </button>
             </div>
-            <pre
-              class="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground"
-              >{{ displayedText(u) }}</pre>
+            <div
+              class="mt-2 max-h-80 overflow-y-auto text-xs text-muted-foreground"
+            >
+              <MarkdownView :source="displayedText(u)" />
+            </div>
           </details>
         </div>
       </template>
