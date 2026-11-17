@@ -121,6 +121,24 @@ async function resetPassword(u: UserRow): Promise<void> {
   }
 }
 
+async function toggleAdmin(u: UserRow, on: boolean): Promise<void> {
+  try {
+    const res = await api<{ user: { role: string } }>(
+      `/api/admin/users/${u.id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ role: on ? "admin" : "user" }),
+      },
+    );
+    u.role = res.user.role;
+    message.value = on
+      ? `${u.username} is now an admin (re-login required)`
+      : `${u.username} is now a regular user`;
+  } catch (err) {
+    message.value = String(err);
+  }
+}
+
 async function toggleUser(u: UserRow): Promise<void> {
   if (u.role === "super_admin" && u.enabled) {
     alert("Cannot disable super admin");
@@ -361,6 +379,7 @@ function moveBackend(i: number, dir: -1 | 1): void {
         Mounted Directories
       </button>
       <button
+        v-if="auth.user?.role === 'super_admin'"
         class="rounded px-3 py-1.5 text-sm transition-colors hover:bg-accent"
         :class="tab === 'users' ? 'bg-accent font-medium' : ''"
         @click="tab = 'users'"
@@ -519,6 +538,20 @@ function moveBackend(i: number, dir: -1 | 1): void {
               {{ u.role }} · {{ u.enabled ? "enabled" : "disabled" }}
             </p>
           </div>
+          <label
+            v-if="u.role !== 'super_admin'"
+            class="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+          >
+            Admin
+            <input
+              type="checkbox"
+              class="h-4 w-4"
+              :checked="u.role === 'admin'"
+              @change="
+                toggleAdmin(u, ($event.target as HTMLInputElement).checked)
+              "
+            />
+          </label>
           <div class="flex shrink-0 gap-1">
             <Button variant="ghost" size="sm" @click="resetPassword(u)">
               Reset Password

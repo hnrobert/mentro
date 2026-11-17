@@ -426,7 +426,10 @@ onMounted(() => {
               <Button size="sm" variant="outline">Download</Button>
             </a>
             <Button
-              v-if="authStore.user?.role === 'super_admin'"
+              v-if="
+                authStore.user?.role === 'super_admin' ||
+                authStore.user?.role === 'admin'
+              "
               size="sm"
               variant="outline"
               title="Permissions"

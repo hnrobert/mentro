@@ -9,7 +9,7 @@
  *    the NEAREST folder with a matching entry decides.
  * 3. No entry anywhere -> visibility: `public` on the asset OR any
  *    ancestor folder grants read to every signed-in user; `internal`
- *    needs an explicit grant. super_admin sees everything.
+ *    needs an explicit grant. super_admin and admin see everything.
  *
  * Load-per-request (no cache): the tables are tiny at corpus scale and
  * SQLite is local — milliseconds. Revisit when assets reach six figures.
@@ -155,7 +155,7 @@ function resolveAsset(
 
 /** All readable asset ids for the user ("all" short-circuits admins). */
 export async function readableAssetIds(user: AuthUser): Promise<Readable> {
-  if (user.role === "super_admin") return "all";
+  if (user.role === "super_admin" || user.role === "admin") return "all";
   const data = await load(user);
   const readable = new Set<string>();
   for (const asset of data.assets) {
@@ -184,7 +184,7 @@ export async function canWrite(
   user: AuthUser,
   assetId: string,
 ): Promise<boolean> {
-  if (user.role === "super_admin") return true;
+  if (user.role === "super_admin" || user.role === "admin") return true;
   const data = await load(user);
   const asset = data.assets.find((a) => a.id === assetId);
   if (!asset) return false;

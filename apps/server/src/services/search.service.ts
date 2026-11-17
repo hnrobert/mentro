@@ -234,7 +234,9 @@ function groupOk(groupId: string | null, groups?: Set<string>): boolean {
 export async function readableSetOf(
   user: AuthUser | undefined,
 ): Promise<Set<string> | undefined> {
-  if (!user || user.role === "super_admin") return undefined;
+  if (!user || user.role === "super_admin" || user.role === "admin") {
+    return undefined;
+  }
   const readable = await readableAssetIds(user);
   return readable === "all" ? undefined : readable;
 }

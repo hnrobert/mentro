@@ -3,6 +3,7 @@
  *  throw ServiceError; the global error handler in index.ts maps it. */
 
 import type { FastifyInstance } from "fastify";
+import { authGuard, contentAdminGuard } from "../auth/guards";
 import {
   createGroup,
   deleteAssetCompletely,
@@ -13,11 +14,18 @@ import {
   updateGroup,
 } from "../services/library.service";
 
-export function registerLibraryRoutes(app: FastifyInstance) {
+export function registerLibraryRoutes(
+  app: FastifyInstance,
+  deps: { jwtSecret: Uint8Array },
+) {
+  const contentGuarded = {
+    preHandler: [authGuard(deps), contentAdminGuard()],
+  };
   app.get("/api/groups", async (request) => groupTree(request.user!));
 
   app.post<{ Body: { name: string; parentId?: string | null } }>(
     "/api/groups",
+    contentGuarded,
     async (request, reply) => {
       const group = await createGroup(
         request.body?.name,
@@ -30,14 +38,18 @@ export function registerLibraryRoutes(app: FastifyInstance) {
   app.patch<{
     Params: { id: string };
     Body: { name?: string; parentId?: string | null; sortOrder?: number };
-  }>("/api/groups/:id", async (request) => ({
+  }>("/api/groups/:id", contentGuarded, async (request) => ({
     group: await updateGroup(request.params.id, request.body ?? {}),
   }));
 
-  app.delete<{ Params: { id: string } }>("/api/groups/:id", async (request) => {
-    await removeGroup(request.params.id);
-    return { ok: true };
-  });
+  app.delete<{ Params: { id: string } }>(
+    "/api/groups/:id",
+    contentGuarded,
+    async (request) => {
+      await removeGroup(request.params.id);
+      return { ok: true };
+    },
+  );
 
   app.get<{
     Querystring: {

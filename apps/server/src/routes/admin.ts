@@ -14,7 +14,7 @@ import {
   scheduleTranslationBackfill,
   translateStatus,
 } from "../translate/service";
-import { adminGuard, authGuard } from "../auth/guards";
+import { adminGuard, authGuard, contentAdminGuard } from "../auth/guards";
 import { ServiceError } from "../services/errors";
 import {
   createUserGroup,
@@ -34,7 +34,13 @@ export function registerAdminRoutes(
   app: FastifyInstance,
   deps: { jwtSecret: Uint8Array },
 ) {
+  // super_admin only: user management + org settings (users, settings,
+  // translate control). Content admins (role 'admin') get the ACL and
+  // content-management surface instead.
   const guarded = { preHandler: [authGuard(deps), adminGuard()] };
+  const contentGuarded = {
+    preHandler: [authGuard(deps), contentAdminGuard()],
+  };
 
   app.get("/api/admin/users", guarded, async () => ({
     users: (await listUsers()).map((u) => ({
@@ -49,7 +55,7 @@ export function registerAdminRoutes(
 
   app.patch<{
     Params: { id: string };
-    Body: { username?: string; enabled?: boolean };
+    Body: { username?: string; enabled?: boolean; role?: string };
   }>("/api/admin/users/:id", guarded, async (request) => ({
     user: await updateUser(request.params.id, request.body ?? {}),
   }));
@@ -124,13 +130,13 @@ export function registerAdminRoutes(
 
   // --- user groups (ACL subjects) ---
 
-  app.get("/api/admin/user-groups", guarded, async () => ({
+  app.get("/api/admin/user-groups", contentGuarded, async () => ({
     groups: await listUserGroups(),
   }));
 
   app.post<{ Body: { name?: string } }>(
     "/api/admin/user-groups",
-    guarded,
+    contentGuarded,
     async (request, reply) => {
       const group = await createUserGroup(request.body?.name ?? "");
       return reply.code(201).send({ group });
@@ -140,13 +146,13 @@ export function registerAdminRoutes(
   app.patch<{
     Params: { id: string };
     Body: { name?: string; memberIds?: string[] };
-  }>("/api/admin/user-groups/:id", guarded, async (request) => ({
+  }>("/api/admin/user-groups/:id", contentGuarded, async (request) => ({
     group: await updateUserGroup(request.params.id, request.body ?? {}),
   }));
 
   app.delete<{ Params: { id: string } }>(
     "/api/admin/user-groups/:id",
-    guarded,
+    contentGuarded,
     async (request) => {
       await removeUserGroup(request.params.id);
       return { ok: true };
@@ -157,7 +163,7 @@ export function registerAdminRoutes(
 
   app.get<{
     Querystring: { targetType?: string; targetId?: string };
-  }>("/api/admin/permissions", guarded, async (request) => {
+  }>("/api/admin/permissions", contentGuarded, async (request) => {
     const { targetType, targetId } = request.query;
     if ((targetType !== "group" && targetType !== "asset") || !targetId) {
       throw new ServiceError(400, "targetType + targetId required");
@@ -173,7 +179,7 @@ export function registerAdminRoutes(
       targetId?: string;
       level?: string | null;
     };
-  }>("/api/admin/permissions", guarded, async (request, reply) => {
+  }>("/api/admin/permissions", contentGuarded, async (request, reply) => {
     const body = request.body ?? {};
     const outcome = await putPermission({
       subjectType: body.subjectType ?? "",
@@ -194,7 +200,7 @@ export function registerAdminRoutes(
       targetId?: string;
       visibility?: string;
     };
-  }>("/api/admin/visibility", guarded, async (request) => {
+  }>("/api/admin/visibility", contentGuarded, async (request) => {
     const { targetType, targetId, visibility } = request.body ?? {};
     if (
       (targetType !== "group" && targetType !== "asset") ||

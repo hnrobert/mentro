@@ -210,7 +210,7 @@ export async function deleteAssetCompletely(
   const asset = await findAssetById(assetId);
   if (!asset) throw new ServiceError(404, "not found");
   const isOwner = asset.uploadedBy === user.id;
-  const isAdmin = user.role === "super_admin";
+  const isAdmin = user.role === "super_admin" || user.role === "admin";
   if (!isOwner && !isAdmin) throw new ServiceError(403, "not your file");
 
   await serializedTx(async (m) => purgeAsset(asset.id, m));

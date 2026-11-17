@@ -37,8 +37,8 @@ export async function listUsers(): Promise<User[]> {
 
 export async function updateUser(
   id: string,
-  patch: { username?: string; enabled?: boolean },
-): Promise<{ id: string; username: string; enabled: boolean }> {
+  patch: { username?: string; enabled?: boolean; role?: string },
+): Promise<{ id: string; username: string; enabled: boolean; role: string }> {
   const user = await findUserById(id);
   if (!user) throw new ServiceError(404, "not found");
   if (patch.username !== undefined) {
@@ -61,8 +61,27 @@ export async function updateUser(
     user.enabled = patch.enabled;
     if (!patch.enabled) await revokeAllSessions(user.id);
   }
+  if (patch.role !== undefined) {
+    // Only super_admin reaches this service path (adminGuard); the
+    // super_admin role itself is fixed at bootstrap and immutable.
+    if (patch.role !== "user" && patch.role !== "admin") {
+      throw new ServiceError(400, "role must be user|admin");
+    }
+    if (user.role === "super_admin") {
+      throw new ServiceError(400, "cannot change super_admin role");
+    }
+    user.role = patch.role;
+    // Access tokens carry the role — force re-login so it takes effect
+    // immediately instead of at token expiry.
+    await revokeAllSessions(user.id);
+  }
   await saveUser(user);
-  return { id: user.id, username: user.username, enabled: user.enabled };
+  return {
+    id: user.id,
+    username: user.username,
+    enabled: user.enabled,
+    role: user.role,
+  };
 }
 
 export async function resetUserPassword(id: string, newPassword: string) {

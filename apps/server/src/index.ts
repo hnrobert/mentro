@@ -179,7 +179,7 @@ async function main(): Promise<void> {
   registerAdminRoutes(app, { jwtSecret });
   registerSourceRoutes(app, { worker });
   registerAssetRoutes(app, pool);
-  registerLibraryRoutes(app);
+  registerLibraryRoutes(app, { jwtSecret });
   // Services throw ServiceError(code, message); map it once here so
   // every thin route handler can simply await the service.
   app.setErrorHandler((err, _request, reply) => {

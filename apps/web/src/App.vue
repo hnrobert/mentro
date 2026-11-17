@@ -25,7 +25,9 @@ const route = useRoute();
 
 const totalCount = ref<number | null>(null);
 
-const isAdmin = computed(() => auth.user?.role === "super_admin");
+const isAdmin = computed(
+  () => auth.user?.role === "super_admin" || auth.user?.role === "admin",
+);
 const showSidebar = computed(() => route.name !== "login");
 
 const uploadOpen = ref(false);

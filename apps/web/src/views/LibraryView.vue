@@ -356,7 +356,10 @@ onMounted(() => {
           </button>
           <span class="ml-1 hidden shrink-0 gap-0.5 group-hover:flex">
             <button
-              v-if="authStore.user?.role === 'super_admin'"
+              v-if="
+                authStore.user?.role === 'super_admin' ||
+                authStore.user?.role === 'admin'
+              "
               class="px-1 text-xs text-muted-foreground hover:text-foreground"
               title="Permissions"
               @click.stop="
