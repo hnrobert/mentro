@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* vue-guarded-save ships Tailwind classes from node_modules — Tailwind
+   v4 must be told to scan them. */
+@source "../node_modules/vue-guarded-save/dist";
+
 @custom-variant dark (&:is(.dark *));
 
 :root {

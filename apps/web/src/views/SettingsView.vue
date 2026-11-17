@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
 import { api } from "@/api/client";
+import { GuardedSave } from "vue-guarded-save";
 import { useAuthStore } from "@/stores/auth";
 
 const route = useRoute();
@@ -39,6 +40,7 @@ const users = ref<UserRow[]>([]);
 const newSourcePath = ref("");
 const message = ref("");
 const allowRegistration = ref(true);
+const allowRegistrationSaved = ref(true);
 
 async function loadSources(): Promise<void> {
   try {
@@ -61,6 +63,7 @@ async function loadUsers(): Promise<void> {
       "/api/admin/settings",
     );
     allowRegistration.value = settings.allowRegistration;
+    allowRegistrationSaved.value = settings.allowRegistration;
   } catch {
     /* admin only */
   }
@@ -99,12 +102,30 @@ async function removeSource(id: string): Promise<void> {
   await loadSources();
 }
 
-async function toggleRegistration(): Promise<void> {
-  const res = await api<{ allowRegistration: boolean }>("/api/admin/settings", {
-    method: "PATCH",
-    body: JSON.stringify({ allowRegistration: !allowRegistration.value }),
-  });
-  allowRegistration.value = res.allowRegistration;
+const regDirty = computed(
+  () => allowRegistration.value !== allowRegistrationSaved.value,
+);
+
+async function saveRegistration(): Promise<boolean> {
+  try {
+    const res = await api<{ allowRegistration: boolean }>(
+      "/api/admin/settings",
+      {
+        method: "PATCH",
+        body: JSON.stringify({ allowRegistration: allowRegistration.value }),
+      },
+    );
+    allowRegistration.value = res.allowRegistration;
+    allowRegistrationSaved.value = res.allowRegistration;
+    return true;
+  } catch (err) {
+    message.value = String(err);
+    return false;
+  }
+}
+
+function discardRegistration(): void {
+  allowRegistration.value = allowRegistrationSaved.value;
 }
 
 async function resetPassword(u: UserRow): Promise<void> {
@@ -285,6 +306,8 @@ const EXTRA_LANGS = [
 ] as const;
 
 const tset = ref<TranslateSettings | null>(null);
+/** Pristine copy the draft is diffed against (GuardedSave dirty/discard). */
+const tsetSaved = ref<TranslateSettings | null>(null);
 const tstatus = ref<LangStatus[]>([]);
 let statusTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -295,6 +318,7 @@ async function loadTranslation(): Promise<void> {
       ...s,
       translateGlossary: s.translateGlossary ?? [],
     };
+    tsetSaved.value = JSON.parse(JSON.stringify(tset.value));
     await refreshTranslateStatus();
   } catch (err) {
     message.value = String(err);
@@ -319,6 +343,15 @@ async function refreshTranslateStatus(): Promise<void> {
   }
 }
 
+const tsetDirty = computed(() => {
+  if (!tset.value || !tsetSaved.value) return false;
+  return JSON.stringify(tset.value) !== JSON.stringify(tsetSaved.value);
+});
+
+function discardTranslation(): void {
+  if (tsetSaved.value) tset.value = JSON.parse(JSON.stringify(tsetSaved.value));
+}
+
 function toggleLang(code: string): void {
   if (!tset.value) return;
   const cur = tset.value.translateEnabledLangs;
@@ -327,8 +360,8 @@ function toggleLang(code: string): void {
     : [...cur, code];
 }
 
-async function saveTranslation(): Promise<void> {
-  if (!tset.value) return;
+async function saveTranslation(): Promise<boolean> {
+  if (!tset.value) return false;
   message.value = "";
   try {
     const s = await api<TranslateSettings>("/api/admin/settings", {
@@ -336,11 +369,14 @@ async function saveTranslation(): Promise<void> {
       body: JSON.stringify(tset.value),
     });
     tset.value = { ...tset.value, ...s };
+    tsetSaved.value = JSON.parse(JSON.stringify(tset.value));
     message.value =
       "Saved. Newly enabled languages start backfilling automatically.";
     await refreshTranslateStatus();
+    return true;
   } catch (err) {
     message.value = String(err);
+    return false; // no ✓-flash on failure
   }
 }
 
@@ -518,14 +554,18 @@ function moveBackend(i: number, dir: -1 | 1): void {
     </template>
 
     <template v-else-if="tab === 'users'">
-      <label class="mb-4 flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          :checked="allowRegistration"
-          @change="toggleRegistration"
-        />
+      <label class="mb-1 flex items-center gap-2 text-sm">
+        <input v-model="allowRegistration" type="checkbox" />
         Allow new user registration
       </label>
+      <GuardedSave
+        class="mb-4"
+        :dirty="regDirty"
+        :on-save="saveRegistration"
+        :on-discard="discardRegistration"
+        :sidebar-inset="false"
+        save-shortcut
+      />
       <div class="space-y-2">
         <div
           v-for="u in users"
@@ -753,11 +793,19 @@ function moveBackend(i: number, dir: -1 | 1): void {
         </div>
 
         <div class="mb-5 flex items-center gap-2">
-          <Button size="sm" @click="saveTranslation">Save</Button>
           <Button variant="outline" size="sm" @click="runTranslateNow">
             Translate Now
           </Button>
         </div>
+        <!-- Save bar + unsaved-leave guard + saving lifecycle. The
+             sidebar is resizable, so no fixed inset — full-width bar. -->
+        <GuardedSave
+          :dirty="tsetDirty"
+          :on-save="saveTranslation"
+          :on-discard="discardTranslation"
+          :sidebar-inset="false"
+          save-shortcut
+        />
 
         <!-- Progress. done = translated + same-source skips, so the bar
              reaches 100% and completed languages show an explicit check. -->
