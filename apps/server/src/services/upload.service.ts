@@ -75,6 +75,9 @@ function takePendingMeta(): PendingMeta[] {
 export interface IncomingFile {
   filename: string;
   file: NodeJS.ReadableStream;
+  /** Multipart fields accumulated before this part (meta may ride on
+   *  any part when clients append files first). */
+  fields?: Record<string, unknown>;
 }
 
 /** Store the files, unpack archives, kick the pool rescan. Throws
@@ -88,9 +91,19 @@ export async function ingestUpload(
     poolSource: () => Promise<Source>;
   },
   files: AsyncIterable<IncomingFile>,
-  opts: { groupId: string | null; uploader: string | null; overwrite: boolean },
+  opts: {
+    groupId: string | null;
+    uploader: string | null;
+    overwrite: boolean;
+    /** Browser-side lastModified per uploaded file, paired by order —
+     *  restored onto the stored file so the scan records the ORIGINAL
+     *  time instead of upload time. */
+    mtimes?: Array<{ name: string; lastModified: number }>;
+  },
 ): Promise<UploadOutcome[]> {
   const outcomes: UploadOutcome[] = [];
+  let fileIndex = 0;
+  let metaList = opts.mtimes ?? [];
   const uploadRoot = path.join(
     deps.config.dataDir,
     "pool",
@@ -100,6 +113,21 @@ export async function ingestUpload(
   fs.mkdirSync(uploadRoot, { recursive: true });
 
   for await (const part of files) {
+    // Late meta (files-first clients): first part carrying it wins.
+    const late = part.fields?.meta;
+    const lateStr =
+      typeof late === "string"
+        ? late
+        : late && typeof late === "object" && "value" in (late as object)
+          ? String((late as { value: unknown }).value)
+          : undefined;
+    if (metaList.length === 0 && lateStr) {
+      try {
+        metaList = JSON.parse(lateStr);
+      } catch {
+        metaList = [];
+      }
+    }
     const name = safeName(part.filename);
 
     // Duplicate-name check within the target group: refuse unless the
@@ -119,6 +147,18 @@ export async function ingestUpload(
 
     const stored = path.join(uploadRoot, `${ulid()}__${name}`);
     outcomes.push(await storePart(part.file, stored, name, deps));
+    // Restore the original modification time (best-effort; ctime is not
+    // exposed by browsers over multipart).
+    const meta = metaList[fileIndex];
+    if (meta && Number.isFinite(meta.lastModified) && meta.lastModified > 0) {
+      try {
+        const when = new Date(meta.lastModified);
+        fs.utimesSync(stored, when, when);
+      } catch {
+        /* metadata is best-effort */
+      }
+    }
+    fileIndex++;
     // Stamp group/uploader on the ingested asset once the pool scan
     // registers it (setPendingGroup is consumed by the scanner).
     setPendingGroup(stored, opts.groupId, opts.uploader);

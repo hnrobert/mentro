@@ -13,6 +13,7 @@ import {
   FileText,
   Library,
   Search,
+  SlidersHorizontal,
   Sparkles,
   Square,
   X,
@@ -56,6 +57,7 @@ interface ServerHit {
   kind: string;
   groupId?: string | null;
   translated?: { lang: string; snippet: string };
+  mtimeMs?: number | null;
 }
 
 interface SuggestHit {
@@ -198,6 +200,30 @@ const executedQuery = ref("");
 const executedScope = ref<Scope>("everywhere");
 const executedGroups = ref("");
 
+// --- advanced: file-mtime filter + sort (panel beside Groups) ---
+const advancedOpen = ref(false);
+const mtimeFrom = ref(""); // yyyy-mm-dd from <input type=date>
+const mtimeTo = ref("");
+const sortBy = ref<"relevance" | "mtime">("relevance");
+const sortDir = ref<"desc" | "asc">("desc");
+const advancedActive = computed(
+  () =>
+    Boolean(mtimeFrom.value) ||
+    Boolean(mtimeTo.value) ||
+    sortBy.value !== "relevance",
+);
+
+function advancedParams(): string {
+  const parts: string[] = [];
+  if (mtimeFrom.value) parts.push(`mtimeFrom=${mtimeFrom.value}`);
+  if (mtimeTo.value) parts.push(`mtimeTo=${mtimeTo.value}`);
+  if (sortBy.value === "mtime") {
+    parts.push("sort=mtime");
+    parts.push(`sortDir=${sortDir.value}`);
+  }
+  return parts.length ? `&${parts.join("&")}` : "";
+}
+
 async function submitSearch(): Promise<void> {
   const q = query.value.trim();
   if (!q) {
@@ -210,7 +236,7 @@ async function submitSearch(): Promise<void> {
   busy.value = true;
   try {
     const res = await api<{ hits: ServerHit[] }>(
-      `/api/search?q=${encodeURIComponent(q)}&limit=50&scope=${scope.value}${groupParams()}`,
+      `/api/search?q=${encodeURIComponent(q)}&limit=50&scope=${scope.value}${groupParams()}${advancedParams()}`,
     );
     hits.value = res.hits.map((h) => ({
       ...h,
@@ -233,8 +259,11 @@ async function submitSearch(): Promise<void> {
   }
 }
 
-/** Re-run when scope/groups change (they are part of the query now). */
+/** Re-run when scope/groups/advanced change (they are part of the query). */
 watch([scope, selectedGroups], () => {
+  if (query.value.trim()) void submitSearch();
+});
+watch([mtimeFrom, mtimeTo, sortBy, sortDir], () => {
   if (query.value.trim()) void submitSearch();
 });
 
@@ -674,6 +703,28 @@ async function rateAi(rating: "up" | "down"): Promise<void> {
             :class="groupPanelOpen ? '' : '-rotate-90'"
           />
         </button>
+        <button
+          class="mx-auto flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-colors hover:bg-accent"
+          :class="
+            advancedActive
+              ? 'border-primary text-foreground'
+              : 'text-muted-foreground'
+          "
+          @click="advancedOpen = !advancedOpen"
+        >
+          <SlidersHorizontal class="h-3.5 w-3.5" />
+          Advanced
+          <span
+            v-if="advancedActive"
+            class="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground"
+          >
+            •
+          </span>
+          <ChevronDown
+            class="h-3.5 w-3.5 transition-transform"
+            :class="advancedOpen ? '' : '-rotate-90'"
+          />
+        </button>
         <div
           v-if="groupPanelOpen"
           class="mt-2 rounded-lg border bg-muted/20 p-3"
@@ -718,6 +769,68 @@ async function rateAi(rating: "up" | "down"): Promise<void> {
               clear
             </button>
           </div>
+        </div>
+      </div>
+
+      <!-- Advanced panel: file-time filter + sort -->
+      <div
+        v-if="advancedOpen"
+        class="mt-2 w-full rounded-lg border bg-muted/20 p-3"
+      >
+        <div class="flex flex-wrap items-end gap-3 text-xs">
+          <label class="text-muted-foreground">
+            Modified from
+            <input
+              v-model="mtimeFrom"
+              type="date"
+              class="mt-1 block h-8 rounded-md border border-input bg-background px-2 text-sm"
+            />
+          </label>
+          <label class="text-muted-foreground">
+            to
+            <input
+              v-model="mtimeTo"
+              type="date"
+              class="mt-1 block h-8 rounded-md border border-input bg-background px-2 text-sm"
+            />
+          </label>
+          <label class="text-muted-foreground">
+            Sort by
+            <select
+              v-model="sortBy"
+              class="mt-1 block h-8 rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="relevance">Relevance</option>
+              <option value="mtime">File time</option>
+            </select>
+          </label>
+          <label
+            class="text-muted-foreground"
+            :class="sortBy === 'mtime' ? '' : 'pointer-events-none opacity-40'"
+          >
+            Order
+            <select
+              v-model="sortDir"
+              class="mt-1 block h-8 rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="desc">Newest first</option>
+              <option value="asc">Oldest first</option>
+            </select>
+          </label>
+          <button
+            class="text-[11px] text-muted-foreground hover:underline"
+            :disabled="!advancedActive"
+            @click="
+              () => {
+                mtimeFrom = '';
+                mtimeTo = '';
+                sortBy = 'relevance';
+                sortDir = 'desc';
+              }
+            "
+          >
+            reset
+          </button>
         </div>
       </div>
     </div>
@@ -962,8 +1075,17 @@ async function rateAi(rating: "up" | "down"): Promise<void> {
           >
           {{ hit.translated.snippet }}
         </p>
-        <p class="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-          {{ hit.assetPath }}
+        <p
+          class="mt-1 flex items-center gap-2 truncate font-mono text-[11px] text-muted-foreground"
+        >
+          <span class="truncate">{{ hit.assetPath }}</span>
+          <span
+            v-if="hit.mtimeMs"
+            class="shrink-0 rounded bg-muted px-1.5 py-0.5 font-sans"
+            :title="'File modified'"
+          >
+            {{ new Date(hit.mtimeMs).toLocaleDateString() }}
+          </span>
         </p>
       </Card>
     </div>

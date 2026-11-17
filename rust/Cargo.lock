@@ -983,6 +983,7 @@ dependencies = [
  "blake3",
  "bzip2 0.4.4",
  "clap",
+ "filetime",
  "flate2",
  "globset",
  "image",

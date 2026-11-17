@@ -28,6 +28,10 @@ export async function registerSearchRoutes(
       mode?: string;
       scope?: string;
       groups?: string;
+      mtimeFrom?: string;
+      mtimeTo?: string;
+      sort?: string;
+      sortDir?: string;
     };
   }>("/api/search", async (request) => {
     const q = (request.query.q ?? "").trim();
@@ -36,6 +40,22 @@ export async function registerSearchRoutes(
       100,
       Math.max(1, Number(request.query.limit ?? 50) || 50),
     );
+    // Advanced: file-mtime window (date or ms epoch) + post sort.
+    const toMs = (v: string | undefined): number | undefined => {
+      if (!v) return undefined;
+      const n = Number(v);
+      if (Number.isFinite(n) && v.trim() !== "") {
+        return n < 1e12 ? n * 1000 : n; // seconds -> ms
+      }
+      const parsed = Date.parse(v);
+      return Number.isNaN(parsed) ? undefined : parsed;
+    };
+    const from = toMs(request.query.mtimeFrom);
+    const to = toMs(request.query.mtimeTo);
+    const mtime =
+      from !== undefined || to !== undefined ? { from, to } : undefined;
+    const sort =
+      request.query.sort === "mtime" ? ("mtime" as const) : undefined;
     const mode =
       request.query.mode === "fts" || request.query.mode === "semantic"
         ? request.query.mode
@@ -51,6 +71,9 @@ export async function registerSearchRoutes(
       scope,
       groups,
       readable: await readableSetOf(request.user),
+      mtime,
+      sort,
+      sortDir: request.query.sortDir === "asc" ? "asc" : "desc",
     });
     return { hits };
   });

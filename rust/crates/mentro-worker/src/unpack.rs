@@ -165,6 +165,31 @@ pub fn unpack(req: &UnpackRequest) -> WorkerResult<UnpackResult> {
     })
 }
 
+/// Restore the archive's own timestamps on an extracted file (uploads
+/// keep their original times this way; the scan then records them).
+fn set_mtime(target: &Path, unix_secs: u64) {
+    if target.is_file() {
+        let _ = filetime::set_file_mtime(
+            target,
+            filetime::FileTime::from_unix_time(unix_secs as i64, 0),
+        );
+    }
+}
+
+/// Civil date (UTC) -> unix seconds (Howard Hinnant's days_from_civil).
+fn civil_to_unix(year: i64, month: u64, day: u64, hour: u64, min: u64, sec: u64) -> u64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64;
+    let m = month;
+    let d = day;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era as u64 * 146_097 + doe - 719_468;
+    days * 86_400 + hour * 3_600 + min * 60 + sec
+}
+
 fn unpack_zip(path: &Path, ctx: &mut Ctx) -> WorkerResult<()> {
     let file = File::open(path)
         .map_err(|e| WorkerError::invalid(format!("open {}: {e}", path.display())))?;
@@ -188,7 +213,20 @@ fn unpack_zip(path: &Path, ctx: &mut Ctx) -> WorkerResult<()> {
             continue;
         };
         let rel = name.clone();
+        let mtime = entry.last_modified().map(|dt| {
+            civil_to_unix(
+                dt.year() as i64,
+                dt.month() as u64,
+                dt.day() as u64,
+                dt.hour() as u64,
+                dt.minute() as u64,
+                dt.second() as u64,
+            )
+        });
         ctx.write_capped(&target, &mut entry, &rel);
+        if let Some(secs) = mtime {
+            set_mtime(&target, secs);
+        }
     }
     Ok(())
 }
@@ -221,7 +259,11 @@ fn unpack_tar(path: &Path, ext: &str, ctx: &mut Ctx) -> WorkerResult<()> {
             continue;
         };
         let rel = name.clone();
+        let mtime = entry.header().mtime().ok();
         ctx.write_capped(&target, &mut entry, &rel);
+        if let Some(secs) = mtime {
+            set_mtime(&target, secs);
+        }
     }
     Ok(())
 }
@@ -317,4 +359,16 @@ fn reconcile(dest: &Path, ctx: &mut Ctx) -> WorkerResult<()> {
         ctx.files.push(rel);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod mtime_tests {
+    use super::civil_to_unix;
+
+    #[test]
+    fn civil_matches_known_timestamps() {
+        assert_eq!(civil_to_unix(1970, 1, 1, 0, 0, 0), 0);
+        assert_eq!(civil_to_unix(2000, 2, 29, 12, 30, 5), 951827405);
+        assert_eq!(civil_to_unix(2026, 11, 17, 23, 59, 59), 1794959999);
+    }
 }

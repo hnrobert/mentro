@@ -23,18 +23,46 @@ export function registerUploadRoutes(
       const parts = request.files({
         limits: { fileSize: deps.config.maxUploadBytes },
       });
-      // Uploaded files land in the selected group (or ungrouped).
-      const groupId =
-        (request.body as { groupId?: string } | undefined)?.groupId ?? null;
+      // attachFieldsToBody is off — non-file fields ride on the first
+      // file part (part.fields); request.body stays undefined.
+      let groupId: string | null = null;
       const uploader = request.user?.id ?? null;
-      const overwrite =
-        (request.body as { overwrite?: boolean } | undefined)?.overwrite ===
-        true;
+      let overwrite = false;
+      let mtimes: Array<{ name: string; lastModified: number }> = [];
+      const it = parts[Symbol.asyncIterator]();
+      const first = await it.next();
+      if (first.done) return reply.code(201).send({ uploaded: [] });
+      const firstPart = first.value;
+      const field = (k: string): string | undefined => {
+        const v = (firstPart as { fields?: Record<string, unknown> }).fields?.[
+          k
+        ];
+        return typeof v === "string" ? v : undefined;
+      };
+      groupId = field("groupId") || null;
+      overwrite = field("overwrite") === "true";
       try {
-        const uploaded = await ingestUpload(deps, parts, {
+        mtimes = JSON.parse(field("meta") ?? "[]");
+      } catch {
+        mtimes = [];
+      }
+      // Re-wrap the peeked part back into a file iterable.
+      const firstFields = (firstPart as { fields?: Record<string, unknown> })
+        .fields;
+      const files = (async function* () {
+        yield { ...firstPart, fields: firstFields } as typeof firstPart;
+        let nxt = await it.next();
+        while (!nxt.done) {
+          yield nxt.value;
+          nxt = await it.next();
+        }
+      })();
+      try {
+        const uploaded = await ingestUpload(deps, files, {
           groupId,
           uploader,
           overwrite,
+          mtimes,
         });
         return reply.code(201).send({ uploaded });
       } catch (err) {

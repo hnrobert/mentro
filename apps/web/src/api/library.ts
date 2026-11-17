@@ -112,9 +112,19 @@ export async function uploadToGroup(
 ): Promise<UploadResult> {
   const auth = loadAuth();
   const form = new FormData();
-  for (const f of files) form.append("files", f, f.name);
+  // Pair by append order; the server restores each file's own
+  // modification time from this metadata (browsers do not expose
+  // creation time over multipart).
+  const meta = files.map((f) => ({
+    name: f.name,
+    lastModified: f.lastModified,
+  }));
+  // Fields FIRST: multipart only exposes fields received before a part
+  // on that part (attachFieldsToBody is off server-side).
   form.append("groupId", groupId ?? "");
   if (overwrite) form.append("overwrite", "true");
+  form.append("meta", JSON.stringify(meta));
+  for (const f of files) form.append("files", f, f.name);
   const res = await fetch("/api/upload", {
     method: "POST",
     headers: auth?.accessToken

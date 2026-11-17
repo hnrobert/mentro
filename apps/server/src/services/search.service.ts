@@ -37,7 +37,16 @@ export async function hybridSearch(
   q: string,
   limit: number,
   mode: "fts" | "semantic" | "hybrid" = "hybrid",
-  opts: { scope?: Scope; groups?: Set<string>; readable?: Set<string> } = {},
+  opts: {
+    scope?: Scope;
+    groups?: Set<string>;
+    readable?: Set<string>;
+    /** File-modification window (ms epoch) — advanced filter. */
+    mtime?: { from?: number; to?: number };
+    /** Post-merge ordering: relevance (default) or file mtime. */
+    sort?: "relevance" | "mtime";
+    sortDir?: "asc" | "desc";
+  } = {},
 ): Promise<SearchHit[]> {
   const readable = opts.readable; // undefined = no ACL restriction (admin)
   const filenameOnly = opts.scope === "filename";
@@ -54,6 +63,7 @@ export async function hybridSearch(
           filenameOnly ? limit * 4 : limit,
           opts.groups,
           readable,
+          opts.mtime,
         ),
     runTranslations
       ? ftsSearchTranslations(
@@ -65,6 +75,7 @@ export async function hybridSearch(
           limit,
           opts.groups,
           readable,
+          opts.mtime,
         )
       : Promise.resolve([]),
     // Filename scope is FTS-only: unit embeddings carry no filename
@@ -115,6 +126,7 @@ export async function hybridSearch(
     semOnly.map((s) => s.unitId),
     opts.groups,
     readable,
+    opts.mtime,
   );
   const hydratedById = new Map(hydrated.map((h) => [h.unitId, h]));
 
@@ -137,8 +149,18 @@ export async function hybridSearch(
     }
   });
 
-  const ranked = [...merged.values()]
-    .sort((a, b) => b.score - a.score)
+  const sorted = [...merged.values()].sort((a, b) => b.score - a.score);
+  if (opts.sort === "mtime") {
+    // File-time ordering wins; relevance score breaks ties (nulls last).
+    const dir = opts.sortDir === "asc" ? 1 : -1;
+    sorted.sort((a, b) => {
+      const am = a.hit.mtimeMs ?? -1;
+      const bm = b.hit.mtimeMs ?? -1;
+      if (am !== bm) return (am - bm) * dir;
+      return b.score - a.score;
+    });
+  }
+  const ranked = sorted
     .slice(0, limit)
     .map(({ hit, score, viaFts, viaSem }) => ({
       ...hit,
@@ -195,12 +217,13 @@ async function hydrateSemantic(
   unitIds: string[],
   groups?: Set<string>,
   readable?: Set<string>,
+  mtime?: { from?: number; to?: number },
 ): Promise<SearchHit[]> {
   if (unitIds.length === 0) return [];
   const rows = (await AppDataSource.query(
     `SELECT cu.id AS unit_id, cu.asset_id, cu.ordinal, cu.unit_type, cu.title,
             substr(COALESCE(cu.text, ''), 1, 200) AS snip,
-            a.path AS asset_path, a.kind, a.group_id
+            a.path AS asset_path, a.kind, a.group_id, a.mtime_ms
      FROM content_units cu JOIN assets a ON a.id = cu.asset_id
      WHERE cu.id IN (${unitIds.map(() => "?").join(",")})`,
     unitIds,
@@ -208,6 +231,14 @@ async function hydrateSemantic(
   return rows
     .filter((r) => groupOk(r.group_id as string | null, groups))
     .filter((r) => !readable || readable.has(r.asset_id as string))
+    .filter((r) => {
+      const ms = (r.mtime_ms as number | null) ?? null;
+      if (mtime?.from !== undefined && (ms === null || ms < mtime.from))
+        return false;
+      if (mtime?.to !== undefined && (ms === null || ms > mtime.to))
+        return false;
+      return true;
+    })
     .map((r) => ({
       unitId: r.unit_id as string,
       assetId: r.asset_id as string,
@@ -222,6 +253,7 @@ async function hydrateSemantic(
       assetPath: r.asset_path as string,
       kind: r.kind as string,
       groupId: (r.group_id as string | null) ?? null,
+      mtimeMs: (r.mtime_ms as number | null) ?? null,
     }));
 }
 

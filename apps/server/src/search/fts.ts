@@ -103,6 +103,7 @@ export async function ftsSearchTranslations(
   limit = 50,
   groups?: Set<string>,
   readable?: Set<string>,
+  mtime?: { from?: number; to?: number },
 ): Promise<TranslationSearchHit[]> {
   if (!matchExpr) return [];
   let groupSql = "";
@@ -124,18 +125,28 @@ export async function ftsSearchTranslations(
     readableSql = ` AND cu.asset_id IN (${[...readable].map(() => "?").join(",") || "''"})`;
     readableParams.push(...[...readable]);
   }
+  let mtimeSql = "";
+  const mtimeParams: unknown[] = [];
+  if (mtime?.from !== undefined) {
+    mtimeSql += " AND a.mtime_ms >= ?";
+    mtimeParams.push(mtime.from);
+  }
+  if (mtime?.to !== undefined) {
+    mtimeSql += " AND a.mtime_ms <= ?";
+    mtimeParams.push(mtime.to);
+  }
   const rows = await AppDataSource.query(
     `SELECT tf.unit_id, tf.lang,
             cu.asset_id, cu.ordinal, cu.unit_type, cu.title,
-            a.path AS asset_path, a.kind, a.group_id,
+            a.path AS asset_path, a.kind, a.group_id, a.mtime_ms,
             snippet(translations_fts, 1, '[', ']', '…', 12) AS snip
      FROM translations_fts tf
      JOIN content_units cu ON cu.id = tf.unit_id
      JOIN assets a ON a.id = cu.asset_id
-     WHERE translations_fts MATCH ?${groupSql}${readableSql}
+     WHERE translations_fts MATCH ?${groupSql}${readableSql}${mtimeSql}
      ORDER BY rank
      LIMIT ?`,
-    [...params, ...readableParams, limit],
+    [...params, ...readableParams, ...mtimeParams, limit],
   );
   return rows.map((r: Record<string, unknown>) => ({
     unitId: r.unit_id as string,
@@ -151,6 +162,7 @@ export async function ftsSearchTranslations(
     assetPath: r.asset_path as string,
     kind: r.kind as string,
     groupId: (r.group_id as string | null) ?? null,
+    mtimeMs: (r.mtime_ms as number | null) ?? null,
     lang: r.lang as string,
   }));
 }
@@ -248,6 +260,9 @@ export interface SearchHit {
   /** Set when the unit matched (at least partly) through its
    *  translation: snippet shown to the user is the translated text. */
   translated?: { lang: string; snippet: string };
+  /** Source file's modification time (assets.mtime_ms) — advanced
+   *  filter/sort on the search page. */
+  mtimeMs: number | null;
 }
 
 export async function ftsSearch(
@@ -255,6 +270,7 @@ export async function ftsSearch(
   limit = 50,
   groups?: Set<string>,
   readable?: Set<string>,
+  mtime?: { from?: number; to?: number },
 ): Promise<SearchHit[]> {
   if (!matchExpr) return [];
   // Group filter (empty set = all). `__ungrouped__` selects null group.
@@ -277,17 +293,27 @@ export async function ftsSearch(
     readableSql = ` AND cu.asset_id IN (${[...readable].map(() => "?").join(",") || "''"})`;
     readableParams.push(...[...readable]);
   }
+  let mtimeSql = "";
+  const mtimeParams: unknown[] = [];
+  if (mtime?.from !== undefined) {
+    mtimeSql += " AND a.mtime_ms >= ?";
+    mtimeParams.push(mtime.from);
+  }
+  if (mtime?.to !== undefined) {
+    mtimeSql += " AND a.mtime_ms <= ?";
+    mtimeParams.push(mtime.to);
+  }
   const rows = await AppDataSource.query(
     `SELECT cu.id AS unit_id, cu.asset_id, cu.ordinal, cu.unit_type, cu.title,
-            a.path AS asset_path, a.kind, a.group_id,
+            a.path AS asset_path, a.kind, a.group_id, a.mtime_ms,
             snippet(units_fts, 1, '[', ']', '…', 12) AS snip
      FROM units_fts
      JOIN content_units cu ON cu.rowid = units_fts.rowid
      JOIN assets a ON a.id = cu.asset_id
-     WHERE units_fts MATCH ?${groupSql}${readableSql}
+     WHERE units_fts MATCH ?${groupSql}${readableSql}${mtimeSql}
      ORDER BY rank
      LIMIT ?`,
-    [...params, ...readableParams, limit],
+    [...params, ...readableParams, ...mtimeParams, limit],
   );
   return rows.map((r: Record<string, unknown>) => ({
     unitId: r.unit_id as string,
