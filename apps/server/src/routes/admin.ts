@@ -57,7 +57,11 @@ export function registerAdminRoutes(
     Params: { id: string };
     Body: { username?: string; enabled?: boolean; role?: string };
   }>("/api/admin/users/:id", guarded, async (request) => ({
-    user: await updateUser(request.params.id, request.body ?? {}),
+    user: await updateUser(
+      request.params.id,
+      request.body ?? {},
+      request.user!.id,
+    ),
   }));
 
   app.post<{ Params: { id: string }; Body: { newPassword?: string } }>(

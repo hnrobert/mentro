@@ -5,6 +5,7 @@ import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
 import { api } from "@/api/client";
 import { GuardedSave } from "vue-guarded-save";
+import { Trash2 } from "lucide-vue-next";
 import { toast } from "vue-sonner";
 import { confirmDialog } from "@/lib/confirm";
 import { useAuthStore } from "@/stores/auth";
@@ -32,14 +33,17 @@ interface UserRow {
 /** The tab IS the route — every settings page has its own URL, so
  *  refresh/back/forward land on the same tab instead of bouncing to
  *  the default. Tab buttons navigate; no local tab state to drift. */
-const tab = computed<"sources" | "users" | "groups" | "translation">(() =>
-  route.name === "settings-users"
-    ? "users"
-    : route.name === "settings-groups"
-      ? "groups"
-      : route.name === "settings-translation"
-        ? "translation"
-        : "sources",
+const tab = computed<"sources" | "users" | "groups" | "translation" | "models">(
+  () =>
+    route.name === "settings-users"
+      ? "users"
+      : route.name === "settings-groups"
+        ? "groups"
+        : route.name === "settings-translation"
+          ? "translation"
+          : route.name === "settings-models"
+            ? "models"
+            : "sources",
 );
 
 function navTab(name: string): void {
@@ -161,10 +165,6 @@ function discardUsers(): void {
   users.value = JSON.parse(JSON.stringify(usersSaved.value));
 }
 
-function toggleAdminLocal(u: UserRow, on: boolean): void {
-  u.role = on ? "admin" : "user";
-}
-
 function toggleEnabledLocal(u: UserRow, on: boolean): void {
   u.enabled = on;
 }
@@ -281,7 +281,135 @@ onMounted(() => {
   if (auth.user?.role === "super_admin" && tab.value === "translation") {
     void loadTranslation();
   }
+  if (auth.user?.role === "super_admin" && tab.value === "models") {
+    void loadModels();
+  }
 });
+
+// --- models tab (admin: LLM registry) ---------------------------------------
+
+interface ModelRow {
+  id: string; // "" for a new draft row
+  name: string;
+  baseUrl: string;
+  apiKey: string; // "__set__" = unchanged
+  model: string;
+  enabled: boolean;
+  makeDefault: boolean;
+  hasKey?: boolean;
+  isNew?: boolean;
+}
+const modelsDraft = ref<ModelRow[]>([]);
+const modelsSaved = ref<ModelRow[]>([]);
+
+const modelsDirty = computed(
+  () => JSON.stringify(modelsDraft.value) !== JSON.stringify(modelsSaved.value),
+);
+
+async function loadModels(): Promise<void> {
+  try {
+    const res = await api<{ models: ModelRow[] }>("/api/admin/models");
+    // apiKey never comes back; keep "__set__" sentinel on saved rows.
+    const rows = res.models.map((m) => ({ ...m, apiKey: "__set__" }));
+    modelsDraft.value = JSON.parse(JSON.stringify(rows));
+    modelsSaved.value = JSON.parse(JSON.stringify(rows));
+  } catch {
+    modelsDraft.value = [];
+    modelsSaved.value = [];
+  }
+}
+
+function addModelRow(): void {
+  modelsDraft.value.push({
+    id: "",
+    name: "",
+    baseUrl: "",
+    apiKey: "",
+    model: "",
+    enabled: true,
+    makeDefault: modelsDraft.value.length === 0,
+    isNew: true,
+  });
+}
+
+function removeModelRow(i: number): void {
+  const row = modelsDraft.value[i]!;
+  if (!row.id) {
+    modelsDraft.value.splice(i, 1);
+    return;
+  }
+  void (async () => {
+    const ok = await confirmDialog({
+      title: `Delete model "${row.name}"?`,
+      description: "Users on it fall back to the default.",
+      confirmText: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await api(`/api/admin/models/${row.id}`, { method: "DELETE" });
+      toast.success("Model deleted");
+      await loadModels();
+    } catch (err) {
+      toast.error(String(err));
+    }
+  })();
+}
+
+function setModelDefault(i: number): void {
+  modelsDraft.value.forEach((m, j) => (m.makeDefault = j === i));
+}
+
+async function saveModels(): Promise<boolean> {
+  try {
+    for (const m of modelsDraft.value) {
+      if (!m.name.trim() || !m.baseUrl.trim() || !m.model.trim()) {
+        toast.error("Every model needs name, base URL and model id");
+        return false;
+      }
+    }
+    for (let i = 0; i < modelsDraft.value.length; i++) {
+      const m = modelsDraft.value[i]!;
+      const snap = modelsSaved.value[i];
+      if (m.id === "") {
+        const res = await api<{ model: { id: string } }>("/api/admin/models", {
+          method: "POST",
+          body: JSON.stringify({
+            name: m.name,
+            baseUrl: m.baseUrl,
+            apiKey: m.apiKey,
+            model: m.model,
+            makeDefault: m.makeDefault,
+          }),
+        });
+        m.id = res.model.id;
+        m.hasKey = true;
+      } else if (snap && JSON.stringify(m) !== JSON.stringify(snap)) {
+        await api(`/api/admin/models/${m.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            name: m.name,
+            baseUrl: m.baseUrl,
+            apiKey: m.apiKey,
+            model: m.model,
+            enabled: m.enabled,
+            makeDefault: m.makeDefault,
+          }),
+        });
+      }
+    }
+    await loadModels();
+    toast.success("Models saved");
+    return true;
+  } catch (err) {
+    toast.error(String(err));
+    return false;
+  }
+}
+
+function discardModels(): void {
+  modelsDraft.value = JSON.parse(JSON.stringify(modelsSaved.value));
+}
 
 // --- translation tab -------------------------------------------------------
 
@@ -446,6 +574,19 @@ function moveBackend(i: number, dir: -1 | 1): void {
       >
         Translation
       </button>
+      <button
+        v-if="auth.user?.role === 'super_admin'"
+        class="rounded px-3 py-1.5 text-sm transition-colors hover:bg-accent"
+        :class="tab === 'models' ? 'bg-accent font-medium' : ''"
+        @click="
+          () => {
+            navTab('settings-models');
+            if (modelsDraft.length === 0) void loadModels();
+          }
+        "
+      >
+        Models
+      </button>
     </div>
 
     <!-- Sources tab -->
@@ -582,19 +723,17 @@ function moveBackend(i: number, dir: -1 | 1): void {
             <label
               class="flex items-center gap-1.5 text-xs text-muted-foreground"
             >
-              Admin
-              <input
-                type="checkbox"
-                class="h-4 w-4"
-                :disabled="u.role === 'super_admin'"
-                :checked="u.role === 'admin'"
-                @change="
-                  toggleAdminLocal(
-                    u,
-                    ($event.target as HTMLInputElement).checked,
-                  )
-                "
-              />
+              Role
+              <select
+                class="h-7 rounded border border-input bg-background px-1.5 text-xs"
+                :value="u.role"
+                :disabled="u.id === auth.user?.id"
+                @change="u.role = ($event.target as HTMLSelectElement).value"
+              >
+                <option value="user">user</option>
+                <option value="admin">admin</option>
+                <option value="super_admin">super_admin</option>
+              </select>
             </label>
             <label
               class="flex items-center gap-1.5 text-xs text-muted-foreground"
@@ -891,6 +1030,90 @@ function moveBackend(i: number, dir: -1 | 1): void {
           </div>
         </div>
       </template>
+    </template>
+
+    <!-- Models tab (admin: AI model registry) -->
+    <template v-else-if="tab === 'models'">
+      <p class="mb-4 text-xs text-muted-foreground">
+        AI models available to the assistant. The default applies to everyone;
+        users pick their own in the answer card.
+      </p>
+      <div class="space-y-3">
+        <div
+          v-for="(m, i) in modelsDraft"
+          :key="i"
+          class="rounded-lg border p-3"
+          :class="m.makeDefault ? 'border-primary/40' : ''"
+        >
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <label class="text-xs text-muted-foreground">
+              Name
+              <Input
+                v-model="m.name"
+                class="mt-1 h-8"
+                placeholder="Turbo (fast)"
+              />
+            </label>
+            <label class="text-xs text-muted-foreground">
+              Model id
+              <Input
+                v-model="m.model"
+                class="mt-1 h-8"
+                placeholder="glm-5-turbo"
+              />
+            </label>
+            <label class="text-xs text-muted-foreground sm:col-span-2">
+              Base URL (OpenAI-compatible)
+              <Input
+                v-model="m.baseUrl"
+                class="mt-1 h-8"
+                placeholder="https://api.example.com/v1"
+              />
+            </label>
+            <label class="text-xs text-muted-foreground sm:col-span-2">
+              API key
+              <Input
+                v-model="m.apiKey"
+                type="password"
+                class="mt-1 h-8"
+                :placeholder="m.hasKey ? 'set (shows __set__)' : 'sk-…'"
+              />
+            </label>
+          </div>
+          <div class="mt-2 flex flex-wrap items-center gap-3 text-xs">
+            <label class="flex items-center gap-1.5 text-muted-foreground">
+              <input
+                type="radio"
+                name="default-model"
+                :checked="m.makeDefault"
+                @change="setModelDefault(i)"
+              />
+              Default
+            </label>
+            <label class="flex items-center gap-1.5 text-muted-foreground">
+              <input v-model="m.enabled" type="checkbox" class="h-3.5 w-3.5" />
+              Enabled
+            </label>
+            <button
+              class="ml-auto rounded p-1 text-muted-foreground transition-colors hover:text-destructive"
+              title="Delete"
+              @click="removeModelRow(i)"
+            >
+              <Trash2 class="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      </div>
+      <Button variant="outline" size="sm" class="mt-3" @click="addModelRow">
+        + Add model
+      </Button>
+      <GuardedSave
+        :dirty="modelsDirty"
+        :on-save="saveModels"
+        :on-discard="discardModels"
+        :sidebar-inset="false"
+        save-shortcut
+      />
     </template>
   </div>
 </template>

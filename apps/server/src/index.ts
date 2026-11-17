@@ -14,6 +14,7 @@ import { Asset, Job, Source } from "./db/entities";
 import { authGuard } from "./auth/guards";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerAdminRoutes } from "./routes/admin";
+import { registerModelRoutes } from "./routes/models";
 import { registerSourceRoutes } from "./routes/sources";
 import { onFsEvent } from "./fs-events";
 import { registerAssetRoutes } from "./routes/assets";
@@ -177,6 +178,7 @@ async function main(): Promise<void> {
     poolSource: () => poolSourcePromise,
   });
   registerAdminRoutes(app, { jwtSecret });
+  registerModelRoutes(app, { jwtSecret });
   registerSourceRoutes(app, { worker });
   registerAssetRoutes(app, pool);
   registerLibraryRoutes(app, { jwtSecret });

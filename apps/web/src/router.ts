@@ -44,6 +44,11 @@ const router = createRouter({
       name: "settings-translation",
       component: () => import("@/views/SettingsView.vue"),
     },
+    {
+      path: "/settings/models",
+      name: "settings-models",
+      component: () => import("@/views/SettingsView.vue"),
+    },
   ],
 });
 

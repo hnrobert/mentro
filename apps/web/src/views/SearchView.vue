@@ -221,6 +221,9 @@ async function submitSearch(): Promise<void> {
     executedGroups.value = groupFilterActive.value
       ? [...selectedGroups.value].join(",")
       : "";
+    // Auto AI overview (Google-style): streams in above the results.
+    aiRated.value = null;
+    void runAi("summarize");
   } catch (err) {
     error.value = String(err);
     toast.error("Search failed");
@@ -325,45 +328,26 @@ const groupFilterActive = computed(() => selectedGroups.value.size > 0);
 
 onMounted(() => {
   void loadGroups();
+  void loadModels();
 });
 
 // --- AI assistant card (inline, streaming) ---------------------------------
 
-type AiMode = "summarize" | "ask" | "plan" | "deepread";
-const AI_MODES: Array<{ value: AiMode; label: string }> = [
-  { value: "summarize", label: "Summarize" },
-  { value: "ask", label: "Ask" },
-  { value: "plan", label: "Plan" },
-  { value: "deepread", label: "Deep Read" },
-];
+type AiMode = "summarize" | "deepread";
 
-const aiOn = ref(localStorage.getItem("mentro:ai-on") === "1");
-const aiMode = ref<AiMode>("summarize");
+/** Google-style AI overview: runs automatically after each search (no
+ *  toggle), streams above the results, thumbs feedback at the end. */
 const aiText = ref("");
 const aiSources = ref<AssistantSource[]>([]);
 const aiBusy = ref(false);
 const aiError = ref("");
-const askInput = ref("");
-const topicInput = ref("");
+const aiRated = ref<"up" | "down" | null>(null);
 /** deepread target, set by the 📖 button on a result row. */
 const aiTarget = ref<{ unitId: string; label: string } | null>(null);
 let aiAbort: AbortController | null = null;
 
-function toggleAi(): void {
-  aiOn.value = !aiOn.value;
-  localStorage.setItem("mentro:ai-on", aiOn.value ? "1" : "0");
-}
-
 function stopAi(): void {
   aiAbort?.abort();
-}
-
-function switchAiMode(m: AiMode): void {
-  aiMode.value = m;
-  aiAbort?.abort(); // any in-flight generation belongs to the old mode
-  aiText.value = "";
-  aiSources.value = [];
-  aiError.value = "";
 }
 
 async function runAi(task: AiMode): Promise<void> {
@@ -375,12 +359,6 @@ async function runAi(task: AiMode): Promise<void> {
     body.q = executedQuery.value;
     body.scope = executedScope.value;
     if (executedGroups.value) body.groups = executedGroups.value;
-  } else if (task === "ask") {
-    if (!askInput.value.trim()) return;
-    body.question = askInput.value.trim();
-  } else if (task === "plan") {
-    if (!topicInput.value.trim()) return;
-    body.topic = topicInput.value.trim();
   } else {
     if (!aiTarget.value) return;
     body.unitId = aiTarget.value.unitId;
@@ -422,9 +400,6 @@ onUnmounted(() => {
 
 /** Result-row 📖: deep-read this page (auto-runs — the click is intent). */
 function startDeepread(hit: ServerHit): void {
-  aiOn.value = true;
-  localStorage.setItem("mentro:ai-on", "1");
-  aiMode.value = "deepread";
   aiTarget.value = {
     unitId: hit.unitId,
     label: `${hit.fileName} · ${hit.unitType} ${hit.ordinal}`,
@@ -486,6 +461,61 @@ function openSourceByIndex(i: number): void {
 function runSuggestedQuery(q: string): void {
   query.value = q;
   void submitSearch();
+}
+
+// --- model registry: user-visible list + personal pick ---
+
+interface ModelOption {
+  id: string;
+  name: string;
+  model: string;
+  enabled: boolean;
+  isDefault: boolean;
+}
+const models = ref<ModelOption[]>([]);
+const myModel = ref<string | null>(null);
+
+async function loadModels(): Promise<void> {
+  try {
+    const [list, me] = await Promise.all([
+      api<{ models: ModelOption[] }>("/api/models"),
+      api<{ endpointId: string | null }>("/api/me/model"),
+    ]);
+    models.value = list.models.filter((m) => m.enabled);
+    myModel.value = me.endpointId;
+  } catch {
+    models.value = [];
+  }
+}
+
+async function pickModel(id: string): Promise<void> {
+  myModel.value = id;
+  try {
+    await api("/api/me/model", {
+      method: "PATCH",
+      body: JSON.stringify({ endpointId: id || null }),
+    });
+    toast.success("AI model updated");
+  } catch (err) {
+    toast.error(String(err));
+  }
+}
+
+async function rateAi(rating: "up" | "down"): Promise<void> {
+  if (aiRated.value) return;
+  aiRated.value = rating;
+  try {
+    await api("/api/assistant/feedback", {
+      method: "POST",
+      body: JSON.stringify({
+        query: executedQuery.value,
+        answer: aiText.value,
+        rating,
+      }),
+    });
+  } catch {
+    /* feedback is best-effort */
+  }
 }
 </script>
 
@@ -601,20 +631,6 @@ function runSuggestedQuery(q: string): void {
             {{ sc.label }}
           </button>
         </div>
-        <button
-          class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors hover:bg-accent"
-          :class="
-            aiOn
-              ? 'border-primary bg-primary/10 font-medium text-foreground'
-              : 'text-muted-foreground'
-          "
-          :aria-pressed="aiOn"
-          title="AI assistant: summarize / ask / research plan / deep read"
-          @click="toggleAi"
-        >
-          <Sparkles class="h-3.5 w-3.5" />
-          AI Assistant
-        </button>
       </div>
 
       <div class="flex flex-wrap justify-center gap-1.5">
@@ -706,130 +722,116 @@ function runSuggestedQuery(q: string): void {
       </div>
     </div>
 
-    <!-- AI assistant card -->
+    <!-- AI overview (auto after search; Google-style) -->
     <div
-      v-if="aiOn"
+      v-if="searched && hits.length > 0"
       class="mb-6 w-full rounded-xl border bg-card text-left shadow-sm"
     >
       <div class="flex items-center justify-between border-b px-3 py-1.5">
-        <div class="flex items-center gap-1">
-          <Sparkles class="mr-1 h-3.5 w-3.5 text-muted-foreground" />
-          <button
-            v-for="m in AI_MODES"
-            :key="m.value"
-            class="rounded-full px-2.5 py-1 text-xs transition-colors"
-            :class="
-              aiMode === m.value
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:bg-accent'
-            "
-            @click="switchAiMode(m.value)"
+        <div class="flex min-w-0 items-center gap-2">
+          <Sparkles class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span class="truncate text-xs font-medium text-muted-foreground">
+            {{
+              aiTarget
+                ? `Deep read · ${aiTarget.label}`
+                : `AI overview · "${executedQuery.slice(0, 32)}"`
+            }}
+          </span>
+          <select
+            class="ml-1 shrink-0 rounded border border-input bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground"
+            :value="myModel ?? models.find((m) => m.isDefault)?.id ?? ''"
+            @change="pickModel(($event.target as HTMLSelectElement).value)"
           >
-            {{ m.label }}
+            <option v-for="m in models" :key="m.id" :value="m.id">
+              {{ m.name }} ({{ m.model }}){{ m.isDefault ? " ·" : "" }}
+            </option>
+          </select>
+          <button
+            v-if="aiTarget"
+            class="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent"
+            @click="
+              aiTarget = null;
+              void runAi('summarize');
+            "
+          >
+            back to overview
           </button>
         </div>
-        <button
-          v-if="aiBusy"
-          class="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          @click="stopAi"
-        >
-          <Square class="h-3 w-3" />
-          Stop
-        </button>
-      </div>
-
-      <!-- mode inputs -->
-      <div class="border-b px-3 py-2">
-        <div v-if="aiMode === 'summarize'" class="flex items-center gap-2">
-          <Button
-            size="sm"
-            :disabled="aiBusy || !searched || hits.length === 0"
-            @click="runAi('summarize')"
+        <span class="flex shrink-0 items-center gap-1">
+          <button
+            v-if="aiBusy"
+            class="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            @click="stopAi"
           >
-            Summarize top {{ Math.min(hits.length, 12) }} of "{{
-              executedQuery.slice(0, 24)
-            }}"
-          </Button>
-          <span
-            v-if="!searched || hits.length === 0"
-            class="text-xs text-muted-foreground"
-          >
-            Run a search first
-          </span>
-        </div>
-        <form
-          v-else-if="aiMode === 'ask'"
-          class="flex items-center gap-2"
-          @submit.prevent="runAi('ask')"
-        >
-          <input
-            v-model="askInput"
-            placeholder="Ask about the library, e.g. yard allocation strategies…"
-            class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
-          />
-          <Button
-            size="sm"
-            type="submit"
-            :disabled="aiBusy || !askInput.trim()"
-          >
-            Ask
-          </Button>
-        </form>
-        <form
-          v-else-if="aiMode === 'plan'"
-          class="flex items-center gap-2"
-          @submit.prevent="runAi('plan')"
-        >
-          <input
-            v-model="topicInput"
-            placeholder="Enter a research topic for a stepwise reading plan…"
-            class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
-          />
-          <Button
-            size="sm"
-            type="submit"
-            :disabled="aiBusy || !topicInput.trim()"
-          >
-            Generate Plan
-          </Button>
-        </form>
-        <div v-else class="flex items-center gap-2 text-xs">
-          <template v-if="aiTarget">
-            <span
-              class="truncate rounded bg-muted px-2 py-1 text-muted-foreground"
-            >
-              {{ aiTarget.label }}
-            </span>
+            <Square class="h-3 w-3" />
+            Stop
+          </button>
+          <template v-else-if="aiText && !aiError">
             <button
-              class="text-muted-foreground hover:underline"
-              :disabled="aiBusy"
-              @click="aiTarget && runAi('deepread')"
+              class="rounded p-1 transition-colors hover:bg-accent"
+              :class="
+                aiRated === 'up' ? 'text-primary' : 'text-muted-foreground'
+              "
+              :disabled="aiRated !== null"
+              title="Helpful"
+              @click="rateAi('up')"
             >
-              Re-read
+              <svg
+                viewBox="0 0 24 24"
+                class="h-3.5 w-3.5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M7 10v12" />
+                <path
+                  d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"
+                />
+              </svg>
+            </button>
+            <button
+              class="rounded p-1 transition-colors hover:bg-accent"
+              :class="
+                aiRated === 'down'
+                  ? 'text-destructive'
+                  : 'text-muted-foreground'
+              "
+              :disabled="aiRated !== null"
+              title="Not helpful"
+              @click="rateAi('down')"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                class="h-3.5 w-3.5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M17 14V2" />
+                <path
+                  d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"
+                />
+              </svg>
             </button>
           </template>
-          <span v-else class="text-muted-foreground">
-            Pick a result below (📖) to deep-read it
-          </span>
-        </div>
+        </span>
       </div>
 
-      <!-- streamed output -->
       <div
-        class="max-h-[28rem] overflow-y-auto px-4 py-3 text-sm leading-relaxed"
+        class="max-h-[24rem] overflow-y-auto px-4 py-3 text-sm leading-relaxed"
       >
         <p v-if="aiError" class="text-destructive">{{ aiError }}</p>
         <p
           v-else-if="aiBusy && !aiText"
           class="animate-pulse text-muted-foreground"
         >
-          Searching the library & generating…
+          Generating AI overview…
         </p>
-        <p v-else-if="!aiText" class="text-muted-foreground">
-          {{ AI_MODES.find((m) => m.value === aiMode)?.label }} output appears
-          here.
-        </p>
-        <template v-for="(l, li) in aiLines" v-else :key="li">
+        <template v-for="(l, li) in aiLines" :key="li">
           <div v-if="l.kind === 'query'" class="my-1">
             <button
               class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors hover:bg-accent"
@@ -845,7 +847,7 @@ function runSuggestedQuery(q: string): void {
               <button
                 v-if="part.cite"
                 class="mx-0.5 rounded bg-muted px-1 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                :title="aiSources.find((s) => s.i === part.cite)?.fileName"
+                :title="aiSources.find((x) => x.i === part.cite)?.fileName"
                 @click="part.cite && openSourceByIndex(part.cite)"
               >
                 {{ part.text }}
@@ -860,20 +862,19 @@ function runSuggestedQuery(q: string): void {
           </div>
         </template>
 
-        <!-- sources -->
         <div
           v-if="aiSources.length > 0 && !aiBusy"
           class="mt-3 flex flex-wrap gap-1.5 border-t pt-2"
         >
           <button
-            v-for="s in aiSources"
-            :key="s.i"
+            v-for="src in aiSources"
+            :key="src.i"
             class="inline-flex max-w-[16rem] items-center gap-1 rounded bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            :title="s.title ?? s.fileName"
-            @click="openSourceByIndex(s.i)"
+            :title="src.title ?? src.fileName"
+            @click="openSourceByIndex(src.i)"
           >
-            【{{ s.i }}】{{ s.fileName }}
-            <span class="opacity-70">{{ s.unitType }} {{ s.ordinal }}</span>
+            【{{ src.i }}】{{ src.fileName }}
+            <span class="opacity-70">{{ src.unitType }} {{ src.ordinal }}</span>
           </button>
         </div>
       </div>

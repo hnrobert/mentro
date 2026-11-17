@@ -27,4 +27,8 @@ export class User {
 
   @Column({ name: "last_login_at", type: "datetime", nullable: true })
   lastLoginAt!: Date | null;
+
+  /** Preferred AI model (llm_endpoints.id); null = site default. */
+  @Column({ name: "llm_endpoint_id", type: "text", nullable: true })
+  llmEndpointId!: string | null;
 }

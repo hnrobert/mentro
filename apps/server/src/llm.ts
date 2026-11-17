@@ -50,9 +50,15 @@ export const LLM_ENV_HINT =
  */
 export async function* llmStream(
   messages: LlmMessage[],
-  opts: { signal?: AbortSignal; temperature?: number; maxTokens?: number } = {},
+  opts: {
+    signal?: AbortSignal;
+    temperature?: number;
+    maxTokens?: number;
+    /** Explicit endpoint (model registry); defaults to env config. */
+    config?: LlmConfig;
+  } = {},
 ): AsyncGenerator<string> {
-  const cfg = llmConfig();
+  const cfg = opts.config ?? llmConfig();
   if (!cfg) throw new Error(`LLM not configured (${LLM_ENV_HINT})`);
 
   const res = await fetch(`${cfg.baseUrl}/chat/completions`, {

@@ -9,7 +9,8 @@ import {
   prepareSummarize,
   type AssistantBody,
 } from "../services/assistant.service";
-import { llmConfig, llmStream, LLM_ENV_HINT } from "../llm";
+import { llmStream, type LlmConfig } from "../llm";
+import { recordFeedback, resolveLlmForUser } from "../services/models.service";
 import { ServiceError } from "../services/errors";
 import type { WorkerClient } from "../worker/client";
 
@@ -23,10 +24,12 @@ export function registerAssistantRoutes(
     // it gets its own budget (mirrors the login route's opt-in).
     { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      if (!llmConfig()) {
+      // Registry (admin-configured) with env fallback; per-user pick.
+      const llm: LlmConfig | null = await resolveLlmForUser(request.user?.id);
+      if (!llm) {
         return reply.code(501).send({
-          error: "LLM not configured",
-          hint: LLM_ENV_HINT,
+          error: "No AI model configured",
+          hint: "admin: Settings → Models",
         });
       }
       const body = request.body ?? {};
@@ -69,6 +72,7 @@ export function registerAssistantRoutes(
           for await (const delta of llmStream(prepared.messages, {
             signal: controller.signal,
             maxTokens: prepared.maxTokens,
+            config: llm,
           })) {
             send({ delta });
           }
@@ -87,4 +91,19 @@ export function registerAssistantRoutes(
       }
     },
   );
+
+  // Thumbs feedback on the auto answer card.
+  app.post<{
+    Body: { query?: string; answer?: string; rating?: string };
+  }>("/api/assistant/feedback", async (request, reply) => {
+    const q = (request.body?.query ?? "").trim();
+    if (!q) return reply.code(400).send({ error: "query required" });
+    await recordFeedback({
+      userId: request.user!.id,
+      query: q,
+      answer: request.body?.answer ?? null,
+      rating: request.body?.rating ?? "",
+    });
+    return { ok: true };
+  });
 }

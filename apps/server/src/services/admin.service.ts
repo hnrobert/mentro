@@ -38,6 +38,7 @@ export async function listUsers(): Promise<User[]> {
 export async function updateUser(
   id: string,
   patch: { username?: string; enabled?: boolean; role?: string },
+  actorId?: string,
 ): Promise<{ id: string; username: string; enabled: boolean; role: string }> {
   const user = await findUserById(id);
   if (!user) throw new ServiceError(404, "not found");
@@ -62,13 +63,28 @@ export async function updateUser(
     if (!patch.enabled) await revokeAllSessions(user.id);
   }
   if (patch.role !== undefined) {
-    // Only super_admin reaches this service path (adminGuard); the
-    // super_admin role itself is fixed at bootstrap and immutable.
-    if (patch.role !== "user" && patch.role !== "admin") {
-      throw new ServiceError(400, "role must be user|admin");
+    // Only super_admin reaches this service path (adminGuard); they may
+    // now grant super_admin too. Guards: no self-demotion, and the
+    // last super_admin cannot be demoted.
+    if (
+      patch.role !== "user" &&
+      patch.role !== "admin" &&
+      patch.role !== "super_admin"
+    ) {
+      throw new ServiceError(400, "role must be user|admin|super_admin");
     }
-    if (user.role === "super_admin") {
-      throw new ServiceError(400, "cannot change super_admin role");
+    if (user.role === "super_admin" && patch.role !== "super_admin") {
+      if (user.id === actorId) {
+        throw new ServiceError(400, "cannot demote yourself");
+      }
+      const superCount = await (
+        await import("../repositories/misc.repository")
+      )
+        .userRepo()
+        .countBy({ role: "super_admin" });
+      if (superCount <= 1) {
+        throw new ServiceError(400, "cannot demote the last super_admin");
+      }
     }
     user.role = patch.role;
     // No session revocation: verifyAccessToken reads role/username from

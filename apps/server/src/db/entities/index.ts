@@ -12,3 +12,5 @@ export * from "./unit-translation.entity";
 export * from "./unit-translation-embedding.entity";
 export * from "./user-session.entity";
 export * from "./user.entity";
+export * from "./llm-endpoint.entity";
+export * from "./ai-feedback.entity";
