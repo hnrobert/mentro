@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from "vue-sonner";
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 import Button from "@/components/ui/Button.vue";
@@ -28,7 +29,9 @@ async function submit() {
     auth.setUser(res.user);
     router.push({ name: "search" });
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err);
+    const msg = err instanceof ApiError ? err.message : String(err);
+    error.value = msg;
+    toast.error(msg);
   } finally {
     busy.value = false;
   }
@@ -76,7 +79,6 @@ async function submit() {
             autocomplete="current-password"
           />
         </div>
-        <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
         <Button type="submit" :disabled="busy || !username || !password">
           {{ mode === "login" ? "Sign In" : "Register & Sign In" }}
         </Button>

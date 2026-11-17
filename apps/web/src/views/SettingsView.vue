@@ -48,7 +48,6 @@ function navTab(name: string): void {
 const sources = ref<SourceRow[]>([]);
 const users = ref<UserRow[]>([]);
 const newSourcePath = ref("");
-const message = ref("");
 const allowRegistration = ref(true);
 const allowRegistrationSaved = ref(true);
 
@@ -65,6 +64,7 @@ async function loadUsers(): Promise<void> {
   try {
     const res = await api<{ users: UserRow[] }>("/api/admin/users");
     users.value = res.users;
+    usersSaved.value = JSON.parse(JSON.stringify(res.users));
   } catch {
     users.value = [];
   }
@@ -82,7 +82,6 @@ async function loadUsers(): Promise<void> {
 async function addSource(): Promise<void> {
   const p = newSourcePath.value.trim();
   if (!p) return;
-  message.value = "";
   try {
     await api("/api/sources", {
       method: "POST",
@@ -92,13 +91,12 @@ async function addSource(): Promise<void> {
     toast.success("Added, scan started");
     await loadSources();
   } catch (err) {
-    message.value = String(err);
+    toast.error(String(err));
   }
 }
 
 async function rescanSource(id: string): Promise<void> {
   await api(`/api/sources/${id}/rescan`, { method: "POST" });
-  message.value = "Rescan started";
 }
 
 async function removeSource(id: string): Promise<void> {
@@ -113,30 +111,62 @@ async function removeSource(id: string): Promise<void> {
   await loadSources();
 }
 
+/** The Users tab is one draft: registration flag + per-user
+ *  role/enabled checkboxes mutate locally; a single GuardedSave bar
+ *  commits the diff (PATCH only what changed). */
+const usersSaved = ref<UserRow[]>([]);
+
 const regDirty = computed(
   () => allowRegistration.value !== allowRegistrationSaved.value,
 );
+const usersDirty = computed(() =>
+  users.value.some((u, i) => {
+    const snap = usersSaved.value[i];
+    return snap && (snap.role !== u.role || snap.enabled !== u.enabled);
+  }),
+);
+const accountDirty = computed(() => regDirty.value || usersDirty.value);
 
-async function saveRegistration(): Promise<boolean> {
+async function saveUsers(): Promise<boolean> {
   try {
-    const res = await api<{ allowRegistration: boolean }>(
-      "/api/admin/settings",
-      {
+    if (regDirty.value) {
+      await api("/api/admin/settings", {
         method: "PATCH",
         body: JSON.stringify({ allowRegistration: allowRegistration.value }),
-      },
-    );
-    allowRegistration.value = res.allowRegistration;
-    allowRegistrationSaved.value = res.allowRegistration;
+      });
+      allowRegistrationSaved.value = allowRegistration.value;
+    }
+    for (let i = 0; i < users.value.length; i++) {
+      const u = users.value[i]!;
+      const snap = usersSaved.value[i];
+      if (!snap || (snap.role === u.role && snap.enabled === u.enabled)) {
+        continue;
+      }
+      await api(`/api/admin/users/${u.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ role: u.role, enabled: u.enabled }),
+      });
+    }
+    usersSaved.value = JSON.parse(JSON.stringify(users.value));
+    toast.success("Account settings saved");
     return true;
   } catch (err) {
-    message.value = String(err);
+    toast.error(String(err));
     return false;
   }
 }
 
-function discardRegistration(): void {
+function discardUsers(): void {
   allowRegistration.value = allowRegistrationSaved.value;
+  users.value = JSON.parse(JSON.stringify(usersSaved.value));
+}
+
+function toggleAdminLocal(u: UserRow, on: boolean): void {
+  u.role = on ? "admin" : "user";
+}
+
+function toggleEnabledLocal(u: UserRow, on: boolean): void {
+  u.enabled = on;
 }
 
 async function resetPassword(u: UserRow): Promise<void> {
@@ -147,40 +177,9 @@ async function resetPassword(u: UserRow): Promise<void> {
       method: "POST",
       body: JSON.stringify({ newPassword: pw }),
     });
-    message.value = `Reset ${u.username}  password`;
   } catch (err) {
-    message.value = String(err);
+    toast.error(String(err));
   }
-}
-
-async function toggleAdmin(u: UserRow, on: boolean): Promise<void> {
-  try {
-    const res = await api<{ user: { role: string } }>(
-      `/api/admin/users/${u.id}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ role: on ? "admin" : "user" }),
-      },
-    );
-    u.role = res.user.role;
-    message.value = on
-      ? `${u.username} is now an admin (re-login required)`
-      : `${u.username} is now a regular user`;
-  } catch (err) {
-    message.value = String(err);
-  }
-}
-
-async function toggleUser(u: UserRow): Promise<void> {
-  if (u.role === "super_admin" && u.enabled) {
-    toast.error("Cannot disable super admin");
-    return;
-  }
-  await api(`/api/admin/users/${u.id}`, {
-    method: "PATCH",
-    body: JSON.stringify({ enabled: !u.enabled }),
-  });
-  await loadUsers();
 }
 
 async function removeUser(u: UserRow): Promise<void> {
@@ -337,7 +336,7 @@ async function loadTranslation(): Promise<void> {
     tsetSaved.value = JSON.parse(JSON.stringify(tset.value));
     await refreshTranslateStatus();
   } catch (err) {
-    message.value = String(err);
+    toast.error(String(err));
   }
 }
 
@@ -378,7 +377,6 @@ function toggleLang(code: string): void {
 
 async function saveTranslation(): Promise<boolean> {
   if (!tset.value) return false;
-  message.value = "";
   try {
     const s = await api<TranslateSettings>("/api/admin/settings", {
       method: "PATCH",
@@ -386,18 +384,15 @@ async function saveTranslation(): Promise<boolean> {
     });
     tset.value = { ...tset.value, ...s };
     tsetSaved.value = JSON.parse(JSON.stringify(tset.value));
-    message.value =
-      "Saved. Newly enabled languages start backfilling automatically.";
+    toast.success("Saved — newly enabled languages backfill automatically");
     await refreshTranslateStatus();
     return true;
   } catch (err) {
-    message.value = String(err);
     return false; // no ✓-flash on failure
   }
 }
 
 async function runTranslateNow(): Promise<void> {
-  message.value = "";
   try {
     await api("/api/admin/translate/run", {
       method: "POST",
@@ -406,7 +401,7 @@ async function runTranslateNow(): Promise<void> {
     toast.success("Translation queued");
     await refreshTranslateStatus();
   } catch (err) {
-    message.value = String(err);
+    toast.error(String(err));
   }
 }
 
@@ -452,9 +447,6 @@ function moveBackend(i: number, dir: -1 | 1): void {
         Translation
       </button>
     </div>
-    <p v-if="message" class="mb-3 text-xs text-muted-foreground">
-      {{ message }}
-    </p>
 
     <!-- Sources tab -->
     <template v-if="tab === 'sources'">
@@ -570,18 +562,10 @@ function moveBackend(i: number, dir: -1 | 1): void {
     </template>
 
     <template v-else-if="tab === 'users'">
-      <label class="mb-1 flex items-center gap-2 text-sm">
+      <label class="mb-4 flex items-center gap-2 text-sm">
         <input v-model="allowRegistration" type="checkbox" />
         Allow new user registration
       </label>
-      <GuardedSave
-        class="mb-4"
-        :dirty="regDirty"
-        :on-save="saveRegistration"
-        :on-discard="discardRegistration"
-        :sidebar-inset="false"
-        save-shortcut
-      />
       <div class="space-y-2">
         <div
           v-for="u in users"
@@ -594,26 +578,45 @@ function moveBackend(i: number, dir: -1 | 1): void {
               {{ u.role }} · {{ u.enabled ? "enabled" : "disabled" }}
             </p>
           </div>
-          <label
-            v-if="u.role !== 'super_admin'"
-            class="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-          >
-            Admin
-            <input
-              type="checkbox"
-              class="h-4 w-4"
-              :checked="u.role === 'admin'"
-              @change="
-                toggleAdmin(u, ($event.target as HTMLInputElement).checked)
-              "
-            />
-          </label>
+          <div class="flex shrink-0 items-center gap-4">
+            <label
+              class="flex items-center gap-1.5 text-xs text-muted-foreground"
+            >
+              Admin
+              <input
+                type="checkbox"
+                class="h-4 w-4"
+                :disabled="u.role === 'super_admin'"
+                :checked="u.role === 'admin'"
+                @change="
+                  toggleAdminLocal(
+                    u,
+                    ($event.target as HTMLInputElement).checked,
+                  )
+                "
+              />
+            </label>
+            <label
+              class="flex items-center gap-1.5 text-xs text-muted-foreground"
+            >
+              Enabled
+              <input
+                type="checkbox"
+                class="h-4 w-4"
+                :disabled="u.role === 'super_admin'"
+                :checked="u.enabled"
+                @change="
+                  toggleEnabledLocal(
+                    u,
+                    ($event.target as HTMLInputElement).checked,
+                  )
+                "
+              />
+            </label>
+          </div>
           <div class="flex shrink-0 gap-1">
             <Button variant="ghost" size="sm" @click="resetPassword(u)">
               Reset Password
-            </Button>
-            <Button variant="ghost" size="sm" @click="toggleUser(u)">
-              {{ u.enabled ? "Disable" : "Enable" }}
             </Button>
             <Button
               variant="ghost"
@@ -626,6 +629,15 @@ function moveBackend(i: number, dir: -1 | 1): void {
           </div>
         </div>
       </div>
+      <!-- One bar for the whole tab: registration + role/enabled diffs
+           commit together; role changes apply live (no re-login). -->
+      <GuardedSave
+        :dirty="accountDirty"
+        :on-save="saveUsers"
+        :on-discard="discardUsers"
+        :sidebar-inset="false"
+        save-shortcut
+      />
     </template>
 
     <!-- Translation tab -->

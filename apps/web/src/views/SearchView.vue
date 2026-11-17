@@ -879,9 +879,6 @@ function runSuggestedQuery(q: string): void {
       </div>
     </div>
 
-    <p v-if="error" class="text-center text-sm text-destructive">
-      {{ error }}
-    </p>
     <p
       v-else-if="searched && hits.length === 0"
       class="text-center text-sm text-muted-foreground"

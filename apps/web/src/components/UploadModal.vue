@@ -139,7 +139,6 @@ async function addGroup(): Promise<void> {
         <Button size="sm" variant="outline" @click="addGroup">Create</Button>
       </div>
 
-      <p v-if="error" class="mb-3 text-sm text-destructive">{{ error }}</p>
       <p v-if="message" class="mb-3 text-sm text-muted-foreground">
         {{ message }}
       </p>

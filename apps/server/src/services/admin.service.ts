@@ -71,9 +71,8 @@ export async function updateUser(
       throw new ServiceError(400, "cannot change super_admin role");
     }
     user.role = patch.role;
-    // Access tokens carry the role — force re-login so it takes effect
-    // immediately instead of at token expiry.
-    await revokeAllSessions(user.id);
+    // No session revocation: verifyAccessToken reads role/username from
+    // the DB on every request, so the change applies immediately.
   }
   await saveUser(user);
   return {

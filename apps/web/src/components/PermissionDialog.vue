@@ -217,8 +217,6 @@ onMounted(() => void load());
       </div>
 
       <div class="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-        <p v-if="error" class="text-xs text-destructive">{{ error }}</p>
-
         <!-- Visibility -->
         <div class="rounded-lg border p-3">
           <p class="text-xs font-medium text-muted-foreground">Visibility</p>

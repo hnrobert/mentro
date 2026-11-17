@@ -233,7 +233,6 @@ async function download(mode: "native" | "original"): Promise<void> {
             />
           </div>
         </div>
-        <p v-if="error" class="text-xs text-destructive">{{ error }}</p>
         <Button
           class="w-full"
           :disabled="cart.items.length === 0 || busy !== '' || !hasCroppable"

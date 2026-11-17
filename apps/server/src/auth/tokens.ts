@@ -40,11 +40,16 @@ export async function verifyAccessToken(
   try {
     const { payload } = await jwtVerify(token, secret);
     if (!payload.sub || typeof payload.role !== "string") return null;
-    return {
+    // The signature proves authenticity; the DB stays AUTHORITATIVE for
+    // enabled/role/username so admin changes (promote/demote/disable)
+    // take effect on the very next request — no forced re-login. One
+    // indexed PK read on local SQLite, same load-per-request philosophy
+    // as the ACL resolver.
+    const user = await AppDataSource.getRepository(User).findOneBy({
       id: payload.sub,
-      role: payload.role,
-      username: typeof payload.uname === "string" ? payload.uname : "",
-    };
+    });
+    if (!user || !user.enabled) return null;
+    return { id: user.id, role: user.role, username: user.username };
   } catch {
     return null;
   }
