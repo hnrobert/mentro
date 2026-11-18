@@ -12,7 +12,7 @@ import {
   agentTranscribe,
   agentUnit,
 } from "../services/agent.service";
-import { ServiceError } from "../services/errors";
+import { ServiceError } from "../lib/errors";
 
 export function registerAgentRoutes(
   app: FastifyInstance,

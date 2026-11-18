@@ -8,7 +8,7 @@ import {
   TranslateLibreSchema,
   TranslateLlmSchema,
 } from "@mentro/protocol";
-import { translateLlmConfig } from "../llm";
+import { translateLlmConfig } from "../lib/llm";
 import type { Settings } from "../services/settings.service";
 
 /** Resolve the ordered backend chain from settings + env. Unconfigured

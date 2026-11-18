@@ -12,8 +12,8 @@ import {
   UnitTranslationEmbedding,
 } from "../db/entities";
 import { ftsDeleteAsset, ftsDeleteTranslationsByAsset } from "../search/fts";
-import { logRemoved, unitIdsOfAsset } from "../indexbundle";
-import { publish } from "../bus";
+import { logRemoved, unitIdsOfAsset } from "../search/bundle";
+import { publish } from "../lib/bus";
 import type { WorkerClient } from "../worker/client";
 
 /** Numeric EAssetKind -> our kind string (keep in sync with the proto). */

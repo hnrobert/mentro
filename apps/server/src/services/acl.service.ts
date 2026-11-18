@@ -25,7 +25,7 @@ import {
   poolRoot,
   readDirMeta,
   type DirPermissionEntry,
-} from "./dir-meta";
+} from "../storage/pool-paths";
 
 export type Readable = "all" | Set<string>;
 

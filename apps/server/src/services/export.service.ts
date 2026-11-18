@@ -11,7 +11,7 @@ import { findJobById, saveJob } from "../repositories/job.repository";
 import type { ExportJobPayload } from "../queue/dispatcher";
 import { canRead } from "./acl.service";
 import type { AuthUser } from "../auth/tokens";
-import { ServiceError } from "./errors";
+import { ServiceError } from "../lib/errors";
 
 export type ExportFormat = "pdf" | "pptx" | "native" | "original";
 

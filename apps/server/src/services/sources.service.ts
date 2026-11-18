@@ -17,9 +17,9 @@ import {
   findSources,
 } from "../repositories/misc.repository";
 import { deleteAssetCascade, runSourceScan } from "../pipeline/scan";
-import { publish } from "../bus";
+import { publish } from "../lib/bus";
 import type { WorkerClient } from "../worker/client";
-import { ServiceError } from "./errors";
+import { ServiceError } from "../lib/errors";
 
 export async function listSources(): Promise<
   Array<Source & { assetCount: number; doneCount: number }>

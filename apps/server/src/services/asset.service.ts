@@ -8,7 +8,7 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { ContentUnit } from "../db/entities";
 import { findAssetById } from "../repositories/asset.repository";
-import { poolAbs } from "./dir-meta";
+import { poolAbs } from "../storage/pool-paths";
 import {
   findUnitById,
   findUnitsOfAsset,
@@ -17,7 +17,7 @@ import {
 import { findTranslationsOfUnit } from "../repositories/translation.repository";
 import { canRead } from "./acl.service";
 import type { AuthUser } from "../auth/tokens";
-import { ServiceError } from "./errors";
+import { ServiceError } from "../lib/errors";
 import type { WorkerPool } from "../worker/pool";
 
 /** Kinds whose pages can be lazily rendered to preview images. */

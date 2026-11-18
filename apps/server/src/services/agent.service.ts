@@ -16,7 +16,7 @@ import {
   insertJob,
 } from "../repositories/job.repository";
 import { canRead } from "./acl.service";
-import { ServiceError } from "./errors";
+import { ServiceError } from "../lib/errors";
 
 export async function agentAssetOverview(
   user: Parameters<typeof canRead>[0],

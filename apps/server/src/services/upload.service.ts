@@ -10,10 +10,10 @@ import { UnpackRequestSchema } from "@mentro/protocol";
 import type { Source } from "../db/entities";
 import { findAssetByFileNameInGroup } from "../repositories/asset.repository";
 import { runSourceScan } from "../pipeline/scan";
-import { publish } from "../bus";
+import { publish } from "../lib/bus";
 import type { WorkerClient } from "../worker/client";
-import type { Config } from "../config";
-import { ServiceError } from "./errors";
+import type { Config } from "../lib/config";
+import { ServiceError } from "../lib/errors";
 
 /** Extensions the worker can unpack (keep in sync with worker unpack.rs). */
 const ARCHIVE_EXTS = new Set([

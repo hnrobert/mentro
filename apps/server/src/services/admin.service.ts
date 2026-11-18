@@ -24,8 +24,12 @@ import {
   savePermission,
 } from "../repositories/misc.repository";
 import { findAssetById, saveAssets } from "../repositories/asset.repository";
-import { readDirMeta, writeDirMeta, type DirPermissionEntry } from "./dir-meta";
-import { ServiceError } from "./errors";
+import {
+  readDirMeta,
+  writeDirMeta,
+  type DirPermissionEntry,
+} from "../storage/pool-paths";
+import { ServiceError } from "../lib/errors";
 
 const USERNAME_RE = /^[A-Za-z0-9_-]{3,32}$/;
 

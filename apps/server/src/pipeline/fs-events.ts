@@ -1,10 +1,10 @@
 /** Debounced fs event consumer: worker raw events → debounced → reconcile. */
 
-import { AppDataSource } from "./db/data-source";
-import { Source } from "./db/entities";
-import { runSourceScan } from "./pipeline/scan";
-import { publish } from "./bus";
-import type { WorkerClient } from "./worker/client";
+import { AppDataSource } from "../db/data-source";
+import { Source } from "../db/entities";
+import { runSourceScan } from "./scan";
+import { publish } from "../lib/bus";
+import type { WorkerClient } from "../worker/client";
 
 /** Path → last event timestamp. Multiple events for the same path within
  * the debounce window collapse into a single action. */
@@ -30,7 +30,7 @@ const timers = new Map<string, ReturnType<typeof setTimeout>>();
 /** Handle a raw fs event from the worker. Debounces rapid-fire writes
  * (editor saves). After the debounce, triggers an incremental scan of
  * the source (cheapest correct reconcile: diff-hash, enqueue, prune). */
-import { invalidateDirMeta } from "./services/dir-meta";
+import { invalidateDirMeta } from "../storage/pool-paths";
 
 export function onFsEvent(event: FsEvent, worker: WorkerClient): void {
   // Directory metadata (.mentro.json) is cached — any fs event in the

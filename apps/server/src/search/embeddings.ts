@@ -1,6 +1,6 @@
 import { AppDataSource } from "../db/data-source";
 import { UnitEmbedding, UnitTranslationEmbedding } from "../db/entities";
-import { onIndexChanged } from "../bus";
+import { onIndexChanged } from "../lib/bus";
 import type { WorkerClient } from "../worker/client";
 
 /** In-memory vector table for brute-force cosine. The sidecar emits

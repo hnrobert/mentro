@@ -8,7 +8,7 @@ import {
   targetLangsOf,
   type Settings,
 } from "../services/settings.service";
-import { publish } from "../bus";
+import { publish } from "../lib/bus";
 import {
   invalidateEmbeddingCache,
   embedTexts,

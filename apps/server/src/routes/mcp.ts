@@ -1,16 +1,16 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { AppDataSource } from "./db/data-source";
-import { authGuard } from "./auth/guards";
-import { countEmbeddings } from "./search/embeddings";
-import { createExportJob } from "./services/export.service";
-import { hybridSearch } from "./services/search.service";
+import { AppDataSource } from "../db/data-source";
+import { authGuard } from "../auth/guards";
+import { countEmbeddings } from "../search/embeddings";
+import { createExportJob } from "../services/export.service";
+import { hybridSearch } from "../services/search.service";
 import {
   agentAssetOverview,
   agentContext,
   agentTranscribe,
   agentUnit,
-} from "./services/agent.service";
-import type { WorkerClient } from "./worker/client";
+} from "../services/agent.service";
+import type { WorkerClient } from "../worker/client";
 
 /**
  * MCP (Model Context Protocol) endpoint — the Agent Tool API exposed in

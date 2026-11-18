@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ulid } from "ulid";
-import { AppDataSource } from "./db/data-source";
-import { Source } from "./db/entities";
-import { runSourceScan } from "./pipeline/scan";
-import type { WorkerClient } from "./worker/client";
+import { AppDataSource } from "../db/data-source";
+import { Source } from "../db/entities";
+import { runSourceScan } from "../pipeline/scan";
+import type { WorkerClient } from "../worker/client";
 
 const sourceRepo = () => AppDataSource.getRepository(Source);
 

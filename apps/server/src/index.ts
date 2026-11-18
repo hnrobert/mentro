@@ -4,7 +4,7 @@ import multipart from "@fastify/multipart";
 import compress from "@fastify/compress";
 import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
-import { loadConfig, loadJwtSecret, lockDataDir } from "./config";
+import { loadConfig, loadJwtSecret, lockDataDir } from "./lib/config";
 import {
   AppDataSource,
   closeDataSource,
@@ -16,19 +16,19 @@ import { registerAuthRoutes } from "./routes/auth";
 import { registerAdminRoutes } from "./routes/admin";
 import { registerModelRoutes } from "./routes/models";
 import { registerSourceRoutes } from "./routes/sources";
-import { onFsEvent } from "./fs-events";
+import { onFsEvent } from "./pipeline/fs-events";
 import { registerAssetRoutes } from "./routes/assets";
 import { registerLibraryRoutes } from "./routes/library";
-import { ServiceError } from "./services/errors";
+import { ServiceError } from "./lib/errors";
 import { registerSearchRoutes } from "./routes/search";
 import { registerAssistantRoutes } from "./routes/assistant";
 import { registerJobRoutes } from "./routes/jobs";
 import { registerExportRoutes } from "./routes/export";
 import { registerAgentRoutes } from "./routes/agent";
-import { registerMcp } from "./mcp";
-import { registerWs } from "./ws";
-import { registerWebStatic } from "./web-static";
-import { ensurePoolSource, mountEnvSources } from "./pool";
+import { registerMcp } from "./routes/mcp";
+import { registerWs } from "./routes/ws";
+import { registerWebStatic } from "./routes/web-static";
+import { ensurePoolSource, mountEnvSources } from "./storage/pool-source";
 import { registerUploadRoutes } from "./routes/upload";
 import { initSegmenter } from "./search/segment";
 import { ftsSelfHeal, translationsSelfHeal } from "./search/fts";
@@ -38,7 +38,7 @@ import {
 } from "./translate/service";
 import { WorkerPool, defaultPoolSize } from "./worker/pool";
 import { Dispatcher } from "./queue/dispatcher";
-import { clientCount, publish } from "./bus";
+import { clientCount, publish } from "./lib/bus";
 
 let snapshotRevision = 0;
 

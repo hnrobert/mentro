@@ -23,10 +23,10 @@ import {
   invalidateEmbeddingCache,
 } from "../search/embeddings";
 import { getSettings, targetLangsOf } from "../services/settings.service";
-import { poolAbs } from "../services/dir-meta";
+import { poolAbs } from "../storage/pool-paths";
 import { enqueueTranslateJob, runTranslateJob } from "../translate/service";
-import { logRemoved, logUpserted, unitIdsOfAsset } from "../indexbundle";
-import { publish } from "../bus";
+import { logRemoved, logUpserted, unitIdsOfAsset } from "../search/bundle";
+import { publish } from "../lib/bus";
 import type { WorkerClient } from "../worker/client";
 import { WorkerPool } from "../worker/pool";
 

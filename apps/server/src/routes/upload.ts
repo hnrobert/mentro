@@ -3,9 +3,9 @@
 import type { FastifyInstance } from "fastify";
 import type { Source } from "../db/entities";
 import type { WorkerClient } from "../worker/client";
-import type { Config } from "../config";
+import type { Config } from "../lib/config";
 import { ingestUpload, type UploadOutcome } from "../services/upload.service";
-import { ServiceError } from "../services/errors";
+import { ServiceError } from "../lib/errors";
 import {
   findAssetByFileNameInGroup,
   findAssetByMd5,

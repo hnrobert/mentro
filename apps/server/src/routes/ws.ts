@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { verifyAccessToken } from "./auth/tokens";
-import { addClient, removeClient } from "./bus";
+import { verifyAccessToken } from "../auth/tokens";
+import { addClient, removeClient } from "../lib/bus";
 
 export function registerWs(
   app: FastifyInstance,

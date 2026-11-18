@@ -9,11 +9,11 @@ import {
 } from "../repositories/content-unit.repository";
 import { hybridSearch, readableSetOf } from "./search.service";
 import type { SearchHit } from "../search/fts";
-import type { LlmMessage } from "../llm";
+import type { LlmMessage } from "../lib/llm";
 import { canRead } from "./acl.service";
 import type { WorkerClient } from "../worker/client";
 import type { AuthUser } from "../auth/tokens";
-import { ServiceError } from "./errors";
+import { ServiceError } from "../lib/errors";
 
 /**
  * AI assistant (search-page card): server-driven RAG over the same

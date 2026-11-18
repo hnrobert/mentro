@@ -6,9 +6,9 @@
 import { ulid } from "ulid";
 import { AppDataSource } from "../db/data-source";
 import { AiFeedback, LlmEndpoint, Setting, User } from "../db/entities";
-import type { LlmConfig } from "../llm";
-import { llmConfig } from "../llm";
-import { ServiceError } from "./errors";
+import type { LlmConfig } from "../lib/llm";
+import { llmConfig } from "../lib/llm";
+import { ServiceError } from "../lib/errors";
 
 /** Default-endpoint marker lives in the settings table (JSON-safe). */
 export interface EndpointView {

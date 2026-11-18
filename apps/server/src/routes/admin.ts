@@ -15,7 +15,7 @@ import {
   translateStatus,
 } from "../translate/service";
 import { adminGuard, authGuard, contentAdminGuard } from "../auth/guards";
-import { ServiceError } from "../services/errors";
+import { ServiceError } from "../lib/errors";
 import {
   createUserGroup,
   listPermissions,

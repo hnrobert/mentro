@@ -21,12 +21,12 @@ import {
 } from "../repositories/translation.repository";
 import { deleteUnitsOfAsset } from "../repositories/content-unit.repository";
 import { ftsDeleteAsset, ftsDeleteTranslationsByAsset } from "../search/fts";
-import { logRemoved, logUpserted, unitIdsOfAsset } from "../indexbundle";
-import { publish } from "../bus";
+import { logRemoved, logUpserted, unitIdsOfAsset } from "../search/bundle";
+import { publish } from "../lib/bus";
 import { canWrite, readableAssetIds } from "./acl.service";
-import { poolAbs, poolRoot, readDirMeta } from "./dir-meta";
+import { poolAbs, poolRoot, readDirMeta } from "../storage/pool-paths";
 import type { AuthUser } from "../auth/tokens";
-import { ServiceError } from "./errors";
+import { ServiceError } from "../lib/errors";
 
 export interface GroupNode {
   /** Pool-relative directory path ("" = pool root). */

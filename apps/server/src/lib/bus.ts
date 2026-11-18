@@ -1,4 +1,8 @@
-import type { WebSocket } from "ws";
+// Minimal WebSocket shape — avoids a lib→routes dependency.
+interface WebSocket {
+  send(data: string): void;
+  readyState: number;
+}
 
 type Client = WebSocket;
 
@@ -19,7 +23,7 @@ export function publish(event: Record<string, unknown>): void {
   }
   const text = JSON.stringify(event);
   for (const ws of clients) {
-    if (ws.readyState === ws.OPEN) ws.send(text);
+    if (ws.readyState === 1 /* OPEN */) ws.send(text);
   }
 }
 

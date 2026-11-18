@@ -9,9 +9,9 @@ import {
   prepareSummarize,
   type AssistantBody,
 } from "../services/assistant.service";
-import { llmStream, type LlmConfig } from "../llm";
+import { llmStream, type LlmConfig } from "../lib/llm";
 import { recordFeedback, resolveLlmForUser } from "../services/models.service";
-import { ServiceError } from "../services/errors";
+import { ServiceError } from "../lib/errors";
 import type { WorkerClient } from "../worker/client";
 
 export function registerAssistantRoutes(

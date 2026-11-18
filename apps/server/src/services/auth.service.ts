@@ -5,7 +5,7 @@
 import { ulid } from "ulid";
 import { User } from "../db/entities";
 import { getSettings } from "./settings.service";
-import type { Config } from "../config";
+import type { Config } from "../lib/config";
 import {
   createSession,
   findUserById,
@@ -21,7 +21,7 @@ import {
   findUserByName,
   saveUser,
 } from "../repositories/misc.repository";
-import { ServiceError } from "./errors";
+import { ServiceError } from "../lib/errors";
 
 const USERNAME_RE = /^[A-Za-z0-9_-]{3,32}$/;
 
