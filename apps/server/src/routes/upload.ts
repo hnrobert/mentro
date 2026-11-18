@@ -6,6 +6,10 @@ import type { WorkerClient } from "../worker/client";
 import type { Config } from "../config";
 import { ingestUpload, type UploadOutcome } from "../services/upload.service";
 import { ServiceError } from "../services/errors";
+import {
+  findAssetByFileNameInGroup,
+  findAssetByMd5,
+} from "../repositories/asset.repository";
 
 export type { UploadOutcome };
 
@@ -17,7 +21,38 @@ export function registerUploadRoutes(
     poolSource: () => Promise<Source>;
   },
 ) {
-  app.post<{ Body?: { groupId?: string | null } }>(
+  // Upload preflight: name+md5+dir per file -> conflict report so the
+  // UI can ask (overwrite / keep both / skip) BEFORE transferring bytes.
+  app.post<{
+    Body: { dir?: string; items?: Array<{ name?: string; md5?: string }> };
+  }>("/api/upload/check", async (request) => {
+    const dir = (request.body?.dir ?? "").replace(/^[./]+/, "");
+    const items = request.body?.items ?? [];
+    const results = await Promise.all(
+      items.map(async (it) => {
+        const name = (it.name ?? "").trim();
+        if (!name) return { status: "error" as const, reason: "missing name" };
+        const sameName = await findAssetByFileNameInGroup(name, dir || null);
+        const sameHash = it.md5 ? await findAssetByMd5(it.md5) : null;
+        if (sameHash) {
+          return {
+            status: "same-hash" as const,
+            existingPath: sameHash.path,
+          };
+        }
+        if (sameName) {
+          return {
+            status: "same-name" as const,
+            existingPath: sameName.path,
+          };
+        }
+        return { status: "ok" as const };
+      }),
+    );
+    return { results };
+  });
+
+  app.post<{ Body?: { dir?: string | null } }>(
     "/api/upload",
     async (request, reply) => {
       const parts = request.files({
@@ -25,7 +60,7 @@ export function registerUploadRoutes(
       });
       // attachFieldsToBody is off — non-file fields ride on the first
       // file part (part.fields); request.body stays undefined.
-      let groupId: string | null = null;
+      let dir = "";
       const uploader = request.user?.id ?? null;
       let overwrite = false;
       let mtimes: Array<{ name: string; lastModified: number }> = [];
@@ -39,7 +74,7 @@ export function registerUploadRoutes(
         ];
         return typeof v === "string" ? v : undefined;
       };
-      groupId = field("groupId") || null;
+      dir = (field("dir") ?? "").replace(/^[./]+/, "");
       overwrite = field("overwrite") === "true";
       try {
         mtimes = JSON.parse(field("meta") ?? "[]");
@@ -59,7 +94,7 @@ export function registerUploadRoutes(
       })();
       try {
         const uploaded = await ingestUpload(deps, files, {
-          groupId,
+          dir,
           uploader,
           overwrite,
           mtimes,

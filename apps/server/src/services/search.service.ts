@@ -223,13 +223,13 @@ async function hydrateSemantic(
   const rows = (await AppDataSource.query(
     `SELECT cu.id AS unit_id, cu.asset_id, cu.ordinal, cu.unit_type, cu.title,
             substr(COALESCE(cu.text, ''), 1, 200) AS snip,
-            a.path AS asset_path, a.kind, a.group_id, a.mtime_ms
+            a.path AS asset_path, a.kind, a.mtime_ms
      FROM content_units cu JOIN assets a ON a.id = cu.asset_id
      WHERE cu.id IN (${unitIds.map(() => "?").join(",")})`,
     unitIds,
   )) as Array<Record<string, unknown>>;
   return rows
-    .filter((r) => groupOk(r.group_id as string | null, groups))
+    .filter((r) => dirOk(dirOfPath(String(r.asset_path ?? "")), groups))
     .filter((r) => !readable || readable.has(r.asset_id as string))
     .filter((r) => {
       const ms = (r.mtime_ms as number | null) ?? null;
@@ -252,14 +252,30 @@ async function hydrateSemantic(
           .pop() ?? "",
       assetPath: r.asset_path as string,
       kind: r.kind as string,
-      groupId: (r.group_id as string | null) ?? null,
       mtimeMs: (r.mtime_ms as number | null) ?? null,
+      dirPath: String(r.asset_path ?? "").slice(
+        0,
+        Math.max(0, String(r.asset_path ?? "").lastIndexOf("/")) || 0,
+      ),
     }));
 }
 
-function groupOk(groupId: string | null, groups?: Set<string>): boolean {
+/** Directory-membership check: a selected directory includes all its
+ *  subdirectories; "__ungrouped__" matches only pool-root files. */
+function dirOk(dirPath: string, groups?: Set<string>): boolean {
   if (!groups || groups.size === 0) return true;
-  return groupId ? groups.has(groupId) : groups.has("__ungrouped__");
+  if (dirPath === "") return groups.has("__ungrouped__");
+  if (groups.has(dirPath)) return true;
+  // Ancestor selected => included via prefix semantics.
+  for (const g of groups) {
+    if (g !== "__ungrouped__" && dirPath.startsWith(`${g}/`)) return true;
+  }
+  return false;
+}
+
+function dirOfPath(p: string): string {
+  const idx = p.lastIndexOf("/");
+  return idx > 0 ? p.slice(0, idx) : "";
 }
 
 /** Readable asset set for a user (undefined = admin/all). */

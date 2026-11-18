@@ -30,7 +30,12 @@ const timers = new Map<string, ReturnType<typeof setTimeout>>();
 /** Handle a raw fs event from the worker. Debounces rapid-fire writes
  * (editor saves). After the debounce, triggers an incremental scan of
  * the source (cheapest correct reconcile: diff-hash, enqueue, prune). */
+import { invalidateDirMeta } from "./services/dir-meta";
+
 export function onFsEvent(event: FsEvent, worker: WorkerClient): void {
+  // Directory metadata (.mentro.json) is cached — any fs event in the
+  // pool could have touched one, so drop the whole (tiny) cache.
+  invalidateDirMeta();
   const now = Date.now();
   pending.set(event.path, now);
   if (!firstSeen.has(event.sourceId)) firstSeen.set(event.sourceId, now);

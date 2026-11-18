@@ -24,7 +24,7 @@ import {
   savePermission,
 } from "../repositories/misc.repository";
 import { findAssetById, saveAssets } from "../repositories/asset.repository";
-import { findGroupById, saveGroup } from "../repositories/group.repository";
+import { readDirMeta, writeDirMeta, type DirPermissionEntry } from "./dir-meta";
 import { ServiceError } from "./errors";
 
 const USERNAME_RE = /^[A-Za-z0-9_-]{3,32}$/;
@@ -172,10 +172,21 @@ export async function removeUserGroup(id: string): Promise<void> {
 // --- permissions (ACL entries) ----------------------------------------------
 
 export async function listPermissions(
-  targetType: "group" | "asset",
+  targetType: "dir" | "asset",
   targetId: string,
 ) {
-  const entries = await findPermissionsOfTarget(targetType, targetId);
+  const entries: Array<{
+    id: string;
+    subjectType: "user" | "user_group";
+    subjectId: string;
+    level: "read" | "write" | "deny";
+  }> =
+    targetType === "dir"
+      ? readDirMeta(targetId).permissions.map((p, i) => ({
+          id: `dir:${i}`,
+          ...p,
+        }))
+      : await findPermissionsOfTarget(targetType, targetId);
   const users = await findUsers();
   const userGroups = await userGroupRepo().find();
   const nameOf = (subjectType: string, subjectId: string): string | null => {
@@ -196,23 +207,48 @@ export async function putPermission(body: {
   targetType: string;
   targetId: string;
   level: string | null;
-}): Promise<{ entry?: Permission; removed?: boolean }> {
+}): Promise<{
+  entry?: { id: string } & DirPermissionEntry;
+  removed?: boolean;
+}> {
   const { subjectType, subjectId, targetType, targetId, level } = body;
   if (
     (subjectType !== "user" && subjectType !== "user_group") ||
     !subjectId ||
-    (targetType !== "group" && targetType !== "asset") ||
+    (targetType !== "dir" && targetType !== "asset") ||
     !targetId
   ) {
     throw new ServiceError(400, "invalid subject/target");
   }
+  // Directory permissions live in .mentro.json inside the directory.
+  if (targetType === "dir") {
+    const meta = readDirMeta(targetId);
+    const list = meta.permissions.filter(
+      (p) => !(p.subjectType === subjectType && p.subjectId === subjectId),
+    );
+    if (level === null || level === undefined) {
+      writeDirMeta(targetId, { ...meta, permissions: list });
+      return { removed: true };
+    }
+    if (level !== "read" && level !== "write" && level !== "deny") {
+      throw new ServiceError(400, "level read|write|deny|null");
+    }
+    const entry: DirPermissionEntry = {
+      subjectType: subjectType as "user" | "user_group",
+      subjectId,
+      level,
+    };
+    list.push(entry);
+    writeDirMeta(targetId, { ...meta, permissions: list });
+    return { entry: { id: `dir:${list.length - 1}`, ...entry } };
+  }
+  // Asset-level permissions stay in the DB.
   const existing = await findPermissionByKey(
     subjectType,
     subjectId,
     targetType,
     targetId,
   );
-  // level=null removes the entry (falls back to inheritance).
   if (level === null || level === undefined) {
     if (existing) await deletePermission(existing.id);
     return { removed: true };
@@ -221,33 +257,39 @@ export async function putPermission(body: {
     throw new ServiceError(400, "level read|write|deny|null");
   }
   if (existing) {
-    existing.level = level;
-    return { entry: await savePermission(existing) };
+    existing.level = level as "read" | "write" | "deny";
+    const saved = await savePermission(existing);
+    return { entry: { id: saved.id, ...body2entry(saved) } };
   }
+  const saved = await savePermission({
+    id: ulid(),
+    subjectType,
+    subjectId,
+    targetType,
+    targetId,
+    level,
+  } as Permission);
+  return { entry: { id: saved.id, ...body2entry(saved) } };
+}
+
+function body2entry(p: Permission): DirPermissionEntry {
   return {
-    entry: await savePermission({
-      id: ulid(),
-      subjectType,
-      subjectId,
-      targetType,
-      targetId,
-      level,
-    } as Permission),
+    subjectType: p.subjectType,
+    subjectId: p.subjectId,
+    level: p.level,
   };
 }
 
 // --- visibility (public/internal) -------------------------------------------
 
 export async function setVisibility(
-  targetType: "group" | "asset",
+  targetType: "dir" | "asset",
   targetId: string,
   visibility: "internal" | "public",
 ): Promise<void> {
-  if (targetType === "group") {
-    const group = await findGroupById(targetId);
-    if (!group) throw new ServiceError(404, "group not found");
-    group.visibility = visibility;
-    await saveGroup(group);
+  if (targetType === "dir") {
+    const meta = readDirMeta(targetId);
+    writeDirMeta(targetId, { ...meta, visibility });
   } else {
     const asset = await findAssetById(targetId);
     if (!asset) throw new ServiceError(404, "asset not found");

@@ -169,7 +169,7 @@ export function registerAdminRoutes(
     Querystring: { targetType?: string; targetId?: string };
   }>("/api/admin/permissions", contentGuarded, async (request) => {
     const { targetType, targetId } = request.query;
-    if ((targetType !== "group" && targetType !== "asset") || !targetId) {
+    if ((targetType !== "dir" && targetType !== "asset") || !targetId) {
       throw new ServiceError(400, "targetType + targetId required");
     }
     return { entries: await listPermissions(targetType, targetId) };
@@ -207,7 +207,7 @@ export function registerAdminRoutes(
   }>("/api/admin/visibility", contentGuarded, async (request) => {
     const { targetType, targetId, visibility } = request.body ?? {};
     if (
-      (targetType !== "group" && targetType !== "asset") ||
+      (targetType !== "dir" && targetType !== "asset") ||
       !targetId ||
       (visibility !== "internal" && visibility !== "public")
     ) {

@@ -36,11 +36,11 @@ export function fetchGroups(): Promise<GroupTree> {
 
 export function createGroup(
   name: string,
-  parentId: string | null,
+  parentId: string,
 ): Promise<{ group: GroupNode }> {
   return api("/api/groups", {
     method: "POST",
-    body: JSON.stringify({ name, parentId }),
+    body: JSON.stringify({ name, parentId: parentId || null }),
   });
 }
 
@@ -81,11 +81,11 @@ export function fetchLibrary(params: {
 
 export function moveAsset(
   id: string,
-  groupId: string | null,
+  dir: string | null,
 ): Promise<{ ok: boolean }> {
-  return api(`/api/assets/${id}/group`, {
+  return api(`/api/assets/:id/group`.replace(":id", id), {
     method: "PATCH",
-    body: JSON.stringify({ groupId }),
+    body: JSON.stringify({ groupId: dir }),
   });
 }
 
@@ -105,9 +105,35 @@ export interface UploadResult {
   duplicate?: { fileName: string; existingId: string };
 }
 
+/** Upload preflight: name+md5 per file against a target dir. */
+export async function checkUpload(
+  files: File[],
+  dir: string,
+  md5s: string[],
+): Promise<
+  Array<{
+    status: "ok" | "same-name" | "same-hash" | "error";
+    existingPath?: string;
+  }>
+> {
+  const items = files.map((f, i) => ({ name: f.name, md5: md5s[i] ?? "" }));
+  const res = await api<{
+    results: Array<never> | Array<{ status: string; existingPath?: string }>;
+  }>("/api/upload/check", {
+    method: "POST",
+    body: JSON.stringify({ dir, items }),
+  });
+  return (
+    (res.results as Array<{
+      status: "ok" | "same-name" | "same-hash";
+      existingPath?: string;
+    }>) ?? []
+  );
+}
+
 export async function uploadToGroup(
   files: File[],
-  groupId: string | null,
+  dir: string,
   overwrite = false,
 ): Promise<UploadResult> {
   const auth = loadAuth();
@@ -121,7 +147,7 @@ export async function uploadToGroup(
   }));
   // Fields FIRST: multipart only exposes fields received before a part
   // on that part (attachFieldsToBody is off server-side).
-  form.append("groupId", groupId ?? "");
+  form.append("dir", dir ?? "");
   if (overwrite) form.append("overwrite", "true");
   form.append("meta", JSON.stringify(meta));
   for (const f of files) form.append("files", f, f.name);

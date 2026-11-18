@@ -18,7 +18,7 @@ export function assetRepo(m?: Q) {
 
 export interface ListAssetsFilter {
   readableIds?: string[]; // undefined = no ACL restriction
-  groupId?: string; // "ungrouped" = null group
+  groupId?: string; // "" = all, "ungrouped" = pool root files, else dir path
   kind?: string;
   q?: string;
   sort?: "uploaded" | "mtime" | "size" | "name";
@@ -39,9 +39,11 @@ export async function listAssets(
       readableIds: filter.readableIds,
     });
   }
-  if (filter.groupId === "ungrouped") qb.andWhere("a.group_id IS NULL");
-  else if (filter.groupId)
-    qb.andWhere("a.group_id = :gid", { gid: filter.groupId });
+  if (filter.groupId === "ungrouped") {
+    qb.andWhere("a.path NOT LIKE :dirPat", { dirPat: "%/%" });
+  } else if (filter.groupId) {
+    qb.andWhere("a.path LIKE :dirPat", { dirPat: `${filter.groupId}/%` });
+  }
   if (filter.kind) qb.andWhere("a.kind = :kind", { kind: filter.kind });
   const sortCol =
     filter.sort === "mtime"
@@ -82,15 +84,29 @@ export async function findAssetById(id: string, m?: Q): Promise<Asset | null> {
   return assetRepo(m).findOneBy({ id });
 }
 
+/** Duplicate-name check within a target directory (null/"" = pool root).
+ *  Paths are plain originals now (no ULID__ prefix). */
 export async function findAssetByFileNameInGroup(
   fileName: string,
   groupId: string | null,
   m?: Q,
 ): Promise<Asset | null> {
+  const rel = groupId ? `${groupId}/${fileName}` : fileName;
   return assetRepo(m)
     .createQueryBuilder("a")
-    .where("a.path LIKE :pattern", { pattern: `%__${fileName}` })
-    .andWhere("a.group_id IS :gid", { gid: groupId ?? null })
+    .where("a.path = :p", { p: rel })
+    .getOne();
+}
+
+/** Same-content check: md5 digest of the file body (upload preflight). */
+export async function findAssetByMd5(
+  md5: string,
+  m?: Q,
+): Promise<Asset | null> {
+  if (!md5) return null;
+  return assetRepo(m)
+    .createQueryBuilder("a")
+    .where("a.md5 = :m", { m: md5 })
     .getOne();
 }
 
@@ -113,28 +129,6 @@ export async function countDoneAssetsBySource(
   m?: Q,
 ): Promise<number> {
   return assetRepo(m).countBy({ sourceId, extractionStatus: "done" });
-}
-
-export async function countAssetsInGroup(
-  groupId: string,
-  m?: Q,
-): Promise<number> {
-  return assetRepo(m).countBy({ groupId });
-}
-
-/** groupId + visibility projection for group counts. */
-export async function assetGroupProjection(
-  m?: Q,
-): Promise<Array<Pick<Asset, "id" | "groupId">>> {
-  return assetRepo(m).find({ select: { id: true, groupId: true } });
-}
-
-export async function setAssetGroup(
-  id: string,
-  groupId: string | null,
-  m?: Q,
-): Promise<void> {
-  await assetRepo(m).update({ id }, { groupId });
 }
 
 export async function saveAssets(items: Asset[], m?: Q): Promise<void> {

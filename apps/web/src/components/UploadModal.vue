@@ -14,7 +14,7 @@ import {
 const emit = defineEmits<{ close: []; uploaded: [] }>();
 
 const groups = ref<GroupNode[]>([]);
-const selectedGroupId = ref<string | null>(null);
+const selectedDir = ref(localStorage.getItem("mentro:upload-dir") ?? "");
 const files = ref<File[]>([]);
 const busy = ref(false);
 const message = ref("");
@@ -47,9 +47,10 @@ async function upload(overwrite = false): Promise<void> {
   error.value = "";
   duplicate.value = null;
   try {
+    localStorage.setItem("mentro:upload-dir", selectedDir.value);
     const result = await uploadToGroup(
       files.value,
-      selectedGroupId.value,
+      selectedDir.value,
       overwrite,
     );
     if (result.duplicate) {
@@ -72,7 +73,7 @@ async function addGroup(): Promise<void> {
   const name = newGroupName.value.trim();
   if (!name) return;
   try {
-    await createGroup(name, selectedGroupId.value);
+    await createGroup(name, selectedDir.value);
     newGroupName.value = "";
     showNewGroup.value = false;
     await loadGroups();
@@ -94,10 +95,10 @@ async function addGroup(): Promise<void> {
       <div class="mb-3 flex flex-col gap-1.5">
         <Label>Target group</Label>
         <select
-          v-model="selectedGroupId"
+          v-model="selectedDir"
           class="h-9 rounded-md border border-input bg-background px-2 text-sm"
         >
-          <option :value="null">Ungrouped</option>
+          <option value="">Pool root (ungrouped)</option>
           <option v-for="g in groups" :key="g.id" :value="g.id">
             {{ g.name }}（{{ g.fileCount }}）
           </option>

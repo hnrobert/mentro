@@ -98,6 +98,11 @@ export interface TranslationSearchHit extends SearchHit {
   lang: string;
 }
 
+function dirOf(p: string): string {
+  const idx = p.lastIndexOf("/");
+  return idx > 0 ? p.slice(0, idx) : "";
+}
+
 export async function ftsSearchTranslations(
   matchExpr: string,
   limit = 50,
@@ -109,14 +114,17 @@ export async function ftsSearchTranslations(
   let groupSql = "";
   const params: unknown[] = [matchExpr];
   if (groups && groups.size > 0) {
-    const ids = [...groups].filter((g) => g !== "__ungrouped__");
-    const wantsUngrouped = groups.has("__ungrouped__");
+    // Groups are pool-relative DIRECTORY paths now; a selected directory
+    // includes all its subdirectories (LIKE prefix). "__ungrouped__" =
+    // files directly in the pool root (no "/" in path).
+    const dirs = [...groups].filter((g) => g !== "__ungrouped__");
+    const wantsRoot = groups.has("__ungrouped__");
     const clauses: string[] = [];
-    if (ids.length > 0) {
-      clauses.push(`a.group_id IN (${ids.map(() => "?").join(",")})`);
-      params.push(...ids);
+    if (dirs.length > 0) {
+      clauses.push(`(${dirs.map(() => "a.path LIKE ?").join(" OR ")})`);
+      params.push(...dirs.map((d) => `${d}/%`));
     }
-    if (wantsUngrouped) clauses.push("a.group_id IS NULL");
+    if (wantsRoot) clauses.push("a.path NOT LIKE '%/%'");
     groupSql = ` AND (${clauses.join(" OR ")})`;
   }
   let readableSql = "";
@@ -138,7 +146,7 @@ export async function ftsSearchTranslations(
   const rows = await AppDataSource.query(
     `SELECT tf.unit_id, tf.lang,
             cu.asset_id, cu.ordinal, cu.unit_type, cu.title,
-            a.path AS asset_path, a.kind, a.group_id, a.mtime_ms,
+            a.path AS asset_path, a.kind, a.mtime_ms,
             snippet(translations_fts, 1, '[', ']', '…', 12) AS snip
      FROM translations_fts tf
      JOIN content_units cu ON cu.id = tf.unit_id
@@ -161,7 +169,6 @@ export async function ftsSearchTranslations(
         .pop() ?? "",
     assetPath: r.asset_path as string,
     kind: r.kind as string,
-    groupId: (r.group_id as string | null) ?? null,
     mtimeMs: (r.mtime_ms as number | null) ?? null,
     lang: r.lang as string,
   }));
@@ -256,7 +263,8 @@ export interface SearchHit {
   fileName: string;
   assetPath: string;
   kind: string;
-  groupId: string | null;
+  /** Pool-relative directory of the file ("" = root) — the new group. */
+  dirPath: string;
   /** Set when the unit matched (at least partly) through its
    *  translation: snippet shown to the user is the translated text. */
   translated?: { lang: string; snippet: string };
@@ -277,14 +285,17 @@ export async function ftsSearch(
   let groupSql = "";
   const params: unknown[] = [matchExpr];
   if (groups && groups.size > 0) {
-    const ids = [...groups].filter((g) => g !== "__ungrouped__");
-    const wantsUngrouped = groups.has("__ungrouped__");
+    // Groups are pool-relative DIRECTORY paths now; a selected directory
+    // includes all its subdirectories (LIKE prefix). "__ungrouped__" =
+    // files directly in the pool root (no "/" in path).
+    const dirs = [...groups].filter((g) => g !== "__ungrouped__");
+    const wantsRoot = groups.has("__ungrouped__");
     const clauses: string[] = [];
-    if (ids.length > 0) {
-      clauses.push(`a.group_id IN (${ids.map(() => "?").join(",")})`);
-      params.push(...ids);
+    if (dirs.length > 0) {
+      clauses.push(`(${dirs.map(() => "a.path LIKE ?").join(" OR ")})`);
+      params.push(...dirs.map((d) => `${d}/%`));
     }
-    if (wantsUngrouped) clauses.push("a.group_id IS NULL");
+    if (wantsRoot) clauses.push("a.path NOT LIKE '%/%'");
     groupSql = ` AND (${clauses.join(" OR ")})`;
   }
   let readableSql = "";
@@ -305,7 +316,7 @@ export async function ftsSearch(
   }
   const rows = await AppDataSource.query(
     `SELECT cu.id AS unit_id, cu.asset_id, cu.ordinal, cu.unit_type, cu.title,
-            a.path AS asset_path, a.kind, a.group_id, a.mtime_ms,
+            a.path AS asset_path, a.kind, a.mtime_ms,
             snippet(units_fts, 1, '[', ']', '…', 12) AS snip
      FROM units_fts
      JOIN content_units cu ON cu.rowid = units_fts.rowid
@@ -328,6 +339,6 @@ export async function ftsSearch(
         .pop() ?? "",
     assetPath: r.asset_path as string,
     kind: r.kind as string,
-    groupId: (r.group_id as string | null) ?? null,
+    dirPath: dirOf(String(r.asset_path ?? "")),
   }));
 }

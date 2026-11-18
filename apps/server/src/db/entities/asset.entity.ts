@@ -21,7 +21,11 @@ export class Asset {
   mtimeMs!: number;
 
   @Column({ name: "content_hash", type: "text", nullable: true })
-  contentHash!: string | null; // blake3 hex
+  contentHash!: string | null;
+
+  /** MD5 of the file body (upload preflight duplicate check). */
+  @Column({ name: "md5", type: "text", nullable: true })
+  md5!: string | null; // blake3 hex
 
   @Column({ type: "text", nullable: true })
   mime!: string | null;
@@ -48,9 +52,6 @@ export class Asset {
 
   @Column({ type: "boolean", nullable: false, default: false })
   oversized!: boolean;
-
-  @Column({ name: "group_id", type: "text", nullable: true })
-  groupId!: string | null;
 
   /** `public` = readable by every signed-in user (对外); `internal`
    *  needs an ACL grant (or admin / uploader). */

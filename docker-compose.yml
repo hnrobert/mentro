@@ -7,12 +7,13 @@ services:
       - "37797:37797"
     volumes:
       - mentro-data:/app/data
-      - ${MENTRO_SOURCES_DIR:-./ref}:/sources:ro
+      - ${MENTRO_SOURCES_DIR:-./ref}:/sources
     environment:
       - MENTRO_BIND=0.0.0.0
       - MENTRO_PORT=37797
       - MENTRO_DATA=/app/data
       - MENTRO_SOURCES=/sources
+      - MENTRO_POOL_DIR=/sources
       # Sidecars run as sibling services: point the worker straight at
       # them. AI assistant (search-page card) uses any OpenAI-compatible
       # endpoint; unset -> the toggle reports "not configured" (501).

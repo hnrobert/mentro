@@ -154,16 +154,20 @@ export async function nearestUnits(
   await load();
   let allowed: Set<string> | null = null;
   if (groups && groups.size > 0) {
-    const ids = [...groups].filter((g) => g !== "__ungrouped__");
-    const wantsUngrouped = groups.has("__ungrouped__");
+    // Directory paths now; LIKE prefix includes subdirectories,
+    // "__ungrouped__" = files directly in the pool root.
+    const dirs = [...groups].filter((g) => g !== "__ungrouped__");
+    const wantsRoot = groups.has("__ungrouped__");
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (dirs.length > 0) {
+      clauses.push(`(${dirs.map(() => "path LIKE ?").join(" OR ")})`);
+      params.push(...dirs.map((d) => `${d}/%`));
+    }
+    if (wantsRoot) clauses.push("path NOT LIKE '%/%'");
     const rows = (await AppDataSource.query(
-      `SELECT id FROM assets WHERE ${[
-        ...(ids.length > 0
-          ? [`group_id IN (${ids.map(() => "?").join(",")})`]
-          : []),
-        ...(wantsUngrouped ? ["group_id IS NULL"] : []),
-      ].join(" OR ")}`,
-      ids,
+      `SELECT id FROM assets WHERE ${clauses.join(" OR ")}`,
+      params,
     )) as Array<{ id: string }>;
     allowed = new Set(rows.map((r) => r.id));
   }

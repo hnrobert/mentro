@@ -34,11 +34,6 @@ function safeName(name: string): string {
   return base.replace(/[^\p{L}\p{N}._-]+/gu, "_").slice(-120) || "file";
 }
 
-function monthDir(): string {
-  const d = new Date();
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
 export interface UploadOutcome {
   name: string;
   storedPath: string;
@@ -52,18 +47,13 @@ export interface UploadOutcome {
 
 interface PendingMeta {
   pathPrefix: string;
-  groupId: string | null;
   uploader: string | null;
 }
 
 let pendingMetas: PendingMeta[] = [];
 
-function setPendingGroup(
-  storedPath: string,
-  groupId: string | null,
-  uploader: string | null,
-): void {
-  pendingMetas.push({ pathPrefix: storedPath, groupId, uploader });
+function setPendingUpload(storedPath: string, uploader: string | null): void {
+  pendingMetas.push({ pathPrefix: storedPath, uploader });
 }
 
 function takePendingMeta(): PendingMeta[] {
@@ -92,7 +82,8 @@ export async function ingestUpload(
   },
   files: AsyncIterable<IncomingFile>,
   opts: {
-    groupId: string | null;
+    /** Pool-relative target directory ("" = root). */
+    dir: string;
     uploader: string | null;
     overwrite: boolean;
     /** Browser-side lastModified per uploaded file, paired by order —
@@ -104,12 +95,7 @@ export async function ingestUpload(
   const outcomes: UploadOutcome[] = [];
   let fileIndex = 0;
   let metaList = opts.mtimes ?? [];
-  const uploadRoot = path.join(
-    deps.config.dataDir,
-    "pool",
-    "_uploads",
-    monthDir(),
-  );
+  const uploadRoot = path.join(deps.config.dataDir, "pool", opts.dir);
   fs.mkdirSync(uploadRoot, { recursive: true });
 
   for await (const part of files) {
@@ -133,7 +119,7 @@ export async function ingestUpload(
     // Duplicate-name check within the target group: refuse unless the
     // client explicitly confirmed overwrite (frontend asks the user).
     if (!opts.overwrite) {
-      const existing = await findAssetByFileNameInGroup(name, opts.groupId);
+      const existing = await findAssetByFileNameInGroup(name, opts.dir || null);
       if (existing) {
         const err = new ServiceError(409, "duplicate") as ServiceError & {
           fileName?: string;
@@ -145,7 +131,7 @@ export async function ingestUpload(
       }
     }
 
-    const stored = path.join(uploadRoot, `${ulid()}__${name}`);
+    const stored = path.join(uploadRoot, name);
     outcomes.push(await storePart(part.file, stored, name, deps));
     // Restore the original modification time (best-effort; ctime is not
     // exposed by browsers over multipart).
@@ -161,7 +147,7 @@ export async function ingestUpload(
     fileIndex++;
     // Stamp group/uploader on the ingested asset once the pool scan
     // registers it (setPendingGroup is consumed by the scanner).
-    setPendingGroup(stored, opts.groupId, opts.uploader);
+    setPendingUpload(stored, opts.uploader);
   }
 
   // Rescan the pool source so unpacked/stored files get indexed.

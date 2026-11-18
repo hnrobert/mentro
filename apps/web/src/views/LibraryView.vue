@@ -171,7 +171,7 @@ watch(search, () => {
 async function addGroup(): Promise<void> {
   const name = newGroupName.value.trim();
   if (!name) return;
-  await createGroup(name, selectedGroup.value);
+  await createGroup(name, selectedGroup.value ?? "");
   newGroupName.value = "";
   await loadGroups();
 }

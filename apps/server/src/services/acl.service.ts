@@ -2,55 +2,58 @@
  * Permission resolution (ACL): the single decision point for "which
  * assets can this user read/write".
  *
- * Model (matches the Permission entity doc):
- * 1. Asset-level ACL entries decide first; user entries beat user-group
- *    entries, deny beats write beats read within a subject tier.
- * 2. No asset entry -> walk the folder chain (asset's group -> parents);
- *    the NEAREST folder with a matching entry decides.
- * 3. No entry anywhere -> visibility: `public` on the asset OR any
- *    ancestor folder grants read to every signed-in user; `internal`
- *    needs an explicit grant. super_admin and admin see everything.
+ * Model (directory-as-group era):
+ * 1. Asset-level DB Permission entries decide first; user entries beat
+ *    user-group entries, deny beats write beats read within a tier.
+ * 2. No asset entry -> walk the DIRECTORY chain (file's dir -> pool
+ *    root), reading each directory's .mentro.json; the NEAREST
+ *    directory with a matching permission entry decides.
+ * 3. No entry anywhere -> visibility: `public` on the asset OR in any
+ *    directory's .mentro.json up the chain grants read to every
+ *    signed-in user; otherwise internal (explicit grant needed).
+ *    super_admin and admin see everything.
  *
- * Load-per-request (no cache): the tables are tiny at corpus scale and
- * SQLite is local — milliseconds. Revisit when assets reach six figures.
+ * Directory metadata physically lives in each directory (.mentro.json),
+ * so renames/moves carry permissions for free — no DB rows to update.
  */
 
 import { AppDataSource } from "../db/data-source";
-import { Asset, Group, Permission, UserGroupMember } from "../db/entities";
+import { Asset, Permission, UserGroupMember } from "../db/entities";
 import type { AuthUser } from "../auth/tokens";
+import {
+  dirChainOf,
+  poolRoot,
+  readDirMeta,
+  type DirPermissionEntry,
+} from "./dir-meta";
 
 export type Readable = "all" | Set<string>;
 
 interface Loaded {
-  permissions: Permission[];
+  permissions: Permission[]; // asset-level DB entries only
   userGroupIds: Set<string>;
-  parentOf: Map<string, string | null>; // groupId -> parentId
-  visibilityOfGroup: Map<string, string>;
   assets: Array<{
     id: string;
-    groupId: string | null;
+    relPath: string; // pool-relative
     visibility: string;
     uploadedBy: string | null;
   }>;
 }
 
 async function load(user: AuthUser): Promise<Loaded> {
-  const [permissions, memberships, groups, assets] = await Promise.all([
+  const [permissions, memberships, assets] = await Promise.all([
     AppDataSource.getRepository(Permission).find(),
     AppDataSource.getRepository(UserGroupMember).find({
       where: { userId: user.id },
     }),
-    AppDataSource.getRepository(Group).find(),
     AppDataSource.getRepository(Asset).find(),
   ]);
   return {
     permissions,
     userGroupIds: new Set(memberships.map((m) => m.groupId)),
-    parentOf: new Map(groups.map((g) => [g.id, g.parentId])),
-    visibilityOfGroup: new Map(groups.map((g) => [g.id, g.visibility])),
     assets: assets.map((a) => ({
       id: a.id,
-      groupId: a.groupId,
+      relPath: a.path,
       visibility: a.visibility,
       uploadedBy: a.uploadedBy,
     })),
@@ -59,7 +62,7 @@ async function load(user: AuthUser): Promise<Loaded> {
 
 /** Best level from entries targeting ONE subject-set at one target. */
 function bestLevel(
-  entries: Permission[],
+  entries: DirPermissionEntry[],
   user: AuthUser,
   userGroupIds: Set<string>,
 ): "read" | "write" | "deny" | null {
@@ -84,32 +87,6 @@ function strongest(levels: Array<"read" | "write" | "deny">) {
   return "read";
 }
 
-/** Folder chain from the given group up to the root (inclusive). */
-function chainOf(
-  groupId: string | null,
-  parentOf: Map<string, string | null>,
-): string[] {
-  const chain: string[] = [];
-  let cur = groupId;
-  let guard = 0;
-  while (cur && guard++ < 64) {
-    chain.push(cur);
-    cur = parentOf.get(cur) ?? null;
-  }
-  return chain;
-}
-
-/** Nearest-folder visibility: any `public` ancestor makes it public. */
-function publicByFolder(
-  groupId: string | null,
-  parentOf: Map<string, string | null>,
-  visibilityOfGroup: Map<string, string>,
-): boolean {
-  return chainOf(groupId, parentOf).some(
-    (g) => visibilityOfGroup.get(g) === "public",
-  );
-}
-
 export interface Resolved {
   level: "none" | "read" | "write";
 }
@@ -119,8 +96,8 @@ function resolveAsset(
   user: AuthUser,
   data: Loaded,
 ): Resolved {
-  // Asset-level entries decide first.
-  const assetLevel = bestLevel(
+  // Asset-level DB entries decide first.
+  const assetLevel = bestDbLevel(
     data.permissions.filter(
       (p) => p.targetType === "asset" && p.targetId === asset.id,
     ),
@@ -130,27 +107,39 @@ function resolveAsset(
   if (assetLevel) {
     return { level: assetLevel === "deny" ? "none" : assetLevel };
   }
-  // Walk folders nearest-first; first folder with an entry decides.
-  for (const folder of chainOf(asset.groupId, data.parentOf)) {
-    const level = bestLevel(
-      data.permissions.filter(
-        (p) => p.targetType === "group" && p.targetId === folder,
-      ),
-      user,
-      data.userGroupIds,
-    );
+  // Walk the directory chain nearest-first; the first directory whose
+  // .mentro.json has a matching entry decides.
+  for (const dir of dirChainOf(asset.relPath)) {
+    const meta = readDirMeta(dir);
+    const level = bestLevel(meta.permissions, user, data.userGroupIds);
     if (level) {
       return { level: level === "deny" ? "none" : level };
     }
   }
-  // Visibility fallback (asset's own flag or any public ancestor).
+  // Visibility fallback: asset's own flag or any public ancestor dir.
   if (
     asset.visibility === "public" ||
-    publicByFolder(asset.groupId, data.parentOf, data.visibilityOfGroup)
+    dirChainOf(asset.relPath).some(
+      (d) => readDirMeta(d).visibility === "public",
+    )
   ) {
     return { level: "read" };
   }
   return { level: "none" };
+}
+
+/** DB Permission rows use the same shape as dir entries via a mapper. */
+function bestDbLevel(
+  entries: Permission[],
+  user: AuthUser,
+  userGroupIds: Set<string>,
+): "read" | "write" | "deny" | null {
+  const mapped: DirPermissionEntry[] = entries.map((p) => ({
+    subjectType: p.subjectType,
+    subjectId: p.subjectId,
+    level: p.level,
+  }));
+  return bestLevel(mapped, user, userGroupIds);
 }
 
 /** All readable asset ids for the user ("all" short-circuits admins). */
@@ -204,3 +193,6 @@ export async function readableFilter(
     params: [...readable],
   };
 }
+
+/** Re-exported for consumers that need the pool root. */
+export { poolRoot };

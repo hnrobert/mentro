@@ -1,30 +1,19 @@
-/** Library domain: group tree with per-user visible counts, group
- *  CRUD validation, the flat asset list, asset move, and asset
- *  deletion (index + translations + disk). Routes stay thin; ACL
- *  decisions come in as resolved readable sets. */
+/** Library domain: the group tree IS the pool directory tree, the flat
+ *  asset list (path-prefix directory filter), real file moves between
+ *  directories, and asset deletion. Groups are never stored in the DB. */
 
 import fs from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import path from "node:path";
-import { ulid } from "ulid";
 import type { EntityManager } from "typeorm";
 import { serializedTx } from "../db/tx";
-import { Asset, Group } from "../db/entities";
+import { Asset } from "../db/entities";
 import {
-  assetGroupProjection,
-  countAssetsInGroup,
   deleteAsset as deleteAssetRow,
   findAssetById,
   listAssets,
   saveAssets,
-  setAssetGroup,
 } from "../repositories/asset.repository";
-import {
-  countChildGroups,
-  deleteGroup,
-  findGroupById,
-  groupRepo,
-  saveGroup,
-} from "../repositories/group.repository";
 import { deleteJobsOfAsset } from "../repositories/job.repository";
 import {
   deleteTranslationEmbeddingsOfAsset,
@@ -35,100 +24,168 @@ import { ftsDeleteAsset, ftsDeleteTranslationsByAsset } from "../search/fts";
 import { logRemoved, logUpserted, unitIdsOfAsset } from "../indexbundle";
 import { publish } from "../bus";
 import { canWrite, readableAssetIds } from "./acl.service";
+import { poolAbs, poolRoot, readDirMeta } from "./dir-meta";
 import type { AuthUser } from "../auth/tokens";
 import { ServiceError } from "./errors";
 
 export interface GroupNode {
+  /** Pool-relative directory path ("" = pool root). */
   id: string;
   name: string;
   parentId: string | null;
-  sortOrder: number;
   fileCount: number;
   visibility: "internal" | "public";
   children: GroupNode[];
 }
 
-/** Group tree with ACL-visible file counts (admins keep raw counts). */
+/** Recursively enumerate pool directories (including empty ones; dot
+ *  dirs are metadata, not groups). */
+async function walkDirs(rel: string, out: string[]): Promise<void> {
+  const abs = poolAbs(rel);
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(abs, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith(".")) continue;
+    const childRel = rel ? `${rel}/${e.name}` : e.name;
+    out.push(childRel);
+    await walkDirs(childRel, out);
+  }
+}
+
+/** Directory tree with ACL-visible file counts. Root files = ungrouped. */
 export async function groupTree(user: AuthUser): Promise<{
   groups: GroupNode[];
   ungrouped: number;
 }> {
   const readable = await readableAssetIds(user);
-  const [groups, assets] = await Promise.all([
-    groupRepo().find({ order: { sortOrder: "ASC", name: "ASC" } }),
-    assetGroupProjection(),
+  const [assets, dirList] = await Promise.all([
+    (await import("../db/data-source")).AppDataSource.getRepository(Asset).find(
+      { select: { id: true, path: true } },
+    ),
+    (async () => {
+      const out: string[] = [];
+      await walkDirs("", out);
+      return out;
+    })(),
   ]);
-  const visibleByGroup = new Map<string | null, number>();
+
+  // Count visible assets per directory (asset's full parent path).
+  const countByDir = new Map<string, number>();
+  let rootCount = 0;
   for (const a of assets) {
-    if (readable === "all" || readable.has(a.id)) {
-      visibleByGroup.set(a.groupId, (visibleByGroup.get(a.groupId) ?? 0) + 1);
+    if (readable !== "all" && !readable.has(a.id)) continue;
+    const parts = a.path.split("/");
+    if (parts.length > 1) {
+      const dir = parts.slice(0, -1).join("/");
+      countByDir.set(dir, (countByDir.get(dir) ?? 0) + 1);
+    } else {
+      rootCount++;
     }
   }
+
   const nodes = new Map<string, GroupNode>();
-  for (const g of groups) {
-    nodes.set(g.id, {
-      id: g.id,
-      name: g.name,
-      parentId: g.parentId,
-      sortOrder: g.sortOrder,
-      fileCount: visibleByGroup.get(g.id) ?? 0,
-      visibility: g.visibility,
+  for (const d of dirList) {
+    const parts = d.split("/");
+    const name = parts[parts.length - 1]!;
+    nodes.set(d, {
+      id: d,
+      name,
+      parentId: parts.length > 1 ? parts.slice(0, -1).join("/") : null,
+      fileCount: countByDir.get(d) ?? 0,
+      visibility: readDirMeta(d).visibility,
       children: [],
     });
   }
   const roots: GroupNode[] = [];
   for (const node of nodes.values()) {
-    if (node.parentId && nodes.has(node.parentId)) {
+    if (node.parentId !== null && nodes.has(node.parentId)) {
       nodes.get(node.parentId)!.children.push(node);
     } else {
       roots.push(node);
     }
   }
-  return { groups: roots, ungrouped: visibleByGroup.get(null) ?? 0 };
+  roots.sort((a, b) => a.name.localeCompare(b.name));
+  return { groups: roots, ungrouped: rootCount };
 }
 
+/** Create a directory (group). */
 export async function createGroup(
   name: string,
-  parentId?: string | null,
-): Promise<Group> {
+  parentId?: string,
+): Promise<{ id: string; name: string }> {
   if (!name?.trim()) throw new ServiceError(400, "name required");
-  if (parentId) {
-    const parent = await findGroupById(parentId);
-    if (!parent) throw new ServiceError(404, "parent not found");
+  const rel = parentId ? `${parentId}/${name.trim()}` : name.trim();
+  try {
+    await fs.mkdir(poolAbs(rel), { recursive: true });
+  } catch (err) {
+    throw new ServiceError(400, String(err));
   }
-  return saveGroup({
-    id: ulid(),
-    name: name.trim(),
-    parentId: parentId ?? null,
-  } as Group);
+  return { id: rel, name: name.trim() };
 }
 
+/** Rename a directory: mv + rewrite asset paths + re-log units. */
 export async function updateGroup(
   id: string,
-  patch: { name?: string; parentId?: string | null; sortOrder?: number },
-): Promise<Group> {
-  const group = await findGroupById(id);
-  if (!group) throw new ServiceError(404, "not found");
-  if (patch.name !== undefined) group.name = patch.name.trim();
-  if (patch.sortOrder !== undefined) group.sortOrder = patch.sortOrder;
-  if (patch.parentId !== undefined) {
-    if (patch.parentId === id) {
-      throw new ServiceError(400, "cannot be its own parent");
-    }
-    group.parentId = patch.parentId;
+  patch: { name?: string },
+): Promise<{ id: string; name: string }> {
+  if (!patch.name?.trim()) throw new ServiceError(400, "name required");
+  const parts = id.split("/");
+  const oldName = parts[parts.length - 1]!;
+  const newName = patch.name.trim();
+  if (oldName === newName) return { id, name: newName };
+  const parent = parts.slice(0, -1).join("/");
+  const newId = parent ? `${parent}/${newName}` : newName;
+  try {
+    await fs.rename(poolAbs(id), poolAbs(newId));
+  } catch (err) {
+    throw new ServiceError(400, String(err));
   }
-  return saveGroup(group);
+  await rewriteAssetPaths(id, newId);
+  return { id: newId, name: newName };
 }
 
+async function rewriteAssetPaths(
+  oldPrefix: string,
+  newPrefix: string,
+): Promise<void> {
+  const repo = (await import("../db/data-source")).AppDataSource.getRepository(
+    Asset,
+  );
+  const affected = await repo
+    .createQueryBuilder("a")
+    .where("a.path LIKE :p", { p: `${oldPrefix}/%` })
+    .getMany();
+  for (const a of affected) {
+    a.path = a.path.replace(`${oldPrefix}/`, `${newPrefix}/`);
+  }
+  if (affected.length > 0) {
+    await repo.save(affected);
+    const unitIds = (
+      await Promise.all(affected.map((a) => unitIdsOfAsset(a.id)))
+    ).flat();
+    await logUpserted(unitIds);
+  }
+  publish({ event: "index.changed" });
+}
+
+/** Remove an EMPTY directory (groups are real dirs; non-empty refuses). */
 export async function removeGroup(id: string): Promise<void> {
-  const group = await findGroupById(id);
-  if (!group) throw new ServiceError(404, "not found");
-  const files = await countAssetsInGroup(group.id);
-  const children = await countChildGroups(group.id);
-  if (files > 0 || children > 0) {
+  const abs = poolAbs(id);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(abs);
+  } catch {
+    throw new ServiceError(404, "not found");
+  }
+  const visible = entries.filter((e) => !e.startsWith("."));
+  if (visible.length > 0) {
     throw new ServiceError(409, "group not empty");
   }
-  await deleteGroup(group.id);
+  await fs.rm(abs, { recursive: true });
 }
 
 export interface ListLibraryOptions {
@@ -145,7 +202,12 @@ export interface ListLibraryOptions {
 export async function listLibrary(
   user: AuthUser,
   opts: ListLibraryOptions,
-): Promise<{ total: number; page: number; pageSize: number; assets: Asset[] }> {
+): Promise<{
+  total: number;
+  page: number;
+  pageSize: number;
+  assets: Asset[];
+}> {
   const readable = await readableAssetIds(user);
   const sort =
     opts.sort === "mtime"
@@ -166,20 +228,17 @@ export async function listLibrary(
     pageSize: opts.pageSize,
   });
 
-  // Backfill: assets indexed before the uploaded_at column existed have
-  // it null. Set it to extracted_at (first-index time) on first read.
   const toBackfill = items.filter(
     (a) => a.uploadedAt === null && a.extractedAt !== null,
   );
   if (toBackfill.length > 0) {
     for (const a of toBackfill) a.uploadedAt = a.extractedAt;
-    // Fire-and-forget write; the response already has the correct value.
     void saveAssets(toBackfill).catch(() => undefined);
   }
   return { total, page: opts.page, pageSize: opts.pageSize, assets: items };
 }
 
-/** Move an asset to a group (admin or asset write). */
+/** Move an asset file to another pool directory (real mv). */
 export async function moveAssetToGroup(
   user: AuthUser,
   assetId: string,
@@ -190,19 +249,24 @@ export async function moveAssetToGroup(
   }
   const asset = await findAssetById(assetId);
   if (!asset) throw new ServiceError(404, "not found");
-  if (groupId) {
-    const group = await findGroupById(groupId);
-    if (!group) throw new ServiceError(404, "group not found");
+  const name = asset.path.split("/").pop()!;
+  const newRel = groupId ? `${groupId}/${name}` : name;
+  const oldAbs = poolAbs(asset.path);
+  const newAbs = poolAbs(newRel);
+  if (oldAbs === newAbs) return;
+  try {
+    await fs.mkdir(path.dirname(newAbs), { recursive: true });
+    await fs.rename(oldAbs, newAbs);
+  } catch (err) {
+    throw new ServiceError(400, String(err));
   }
-  await setAssetGroup(asset.id, groupId ?? null);
-  // The search bundle carries groupId — re-log the asset's units so
-  // deltas propagate the move to browsers.
+  asset.path = newRel;
+  await saveAssets([asset]);
   await logUpserted(await unitIdsOfAsset(asset.id));
   publish({ event: "index.changed" });
 }
 
-/** Delete an asset: index + translations + disk file, uniformly
- *  (uploaded or mounted). Own uploads only unless super_admin. */
+/** Delete an asset: index + translations + disk file. */
 export async function deleteAssetCompletely(
   user: AuthUser,
   assetId: string,
@@ -214,15 +278,8 @@ export async function deleteAssetCompletely(
   if (!isOwner && !isAdmin) throw new ServiceError(403, "not your file");
 
   await serializedTx(async (m) => purgeAsset(asset.id, m));
-  // Remove the disk file.
   try {
-    if (
-      asset.path.startsWith(
-        path.join(process.env.MENTRO_DATA ?? "./data", "pool"),
-      )
-    ) {
-      await fs.unlink(asset.path);
-    }
+    await fs.unlink(poolAbs(asset.path));
   } catch {
     /* file may already be gone */
   }
@@ -235,8 +292,6 @@ export async function purgeAsset(
   m: EntityManager,
 ): Promise<void> {
   await ftsDeleteAsset(assetId, m);
-  // Translations FTS rows resolve unit ids through content_units —
-  // delete BEFORE the units themselves go.
   await ftsDeleteTranslationsByAsset(assetId, m);
   await logRemoved(await unitIdsOfAsset(assetId, m), m);
   await deleteTranslationsOfAsset(assetId, m);
@@ -245,3 +300,5 @@ export async function purgeAsset(
   await deleteJobsOfAsset(assetId, m);
   await deleteAssetRow(assetId, m);
 }
+
+export { poolRoot };

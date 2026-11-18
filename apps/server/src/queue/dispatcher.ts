@@ -23,6 +23,7 @@ import {
   invalidateEmbeddingCache,
 } from "../search/embeddings";
 import { getSettings, targetLangsOf } from "../services/settings.service";
+import { poolAbs } from "../services/dir-meta";
 import { enqueueTranslateJob, runTranslateJob } from "../translate/service";
 import { logRemoved, logUpserted, unitIdsOfAsset } from "../indexbundle";
 import { publish } from "../bus";
@@ -180,7 +181,7 @@ export class Dispatcher {
       const want = kind === 3 || kind === 4 ? [COVER_THUMB] : []; // presentation/document
       const resp = await worker.extract({
         assetId: asset.id,
-        path: asset.path,
+        path: poolAbs(asset.path),
         contentHash: asset.contentHash ?? "",
         kind,
         want,
@@ -359,7 +360,7 @@ export class Dispatcher {
       const resp = await worker.transcribe(
         {
           assetId: asset.id,
-          path: asset.path,
+          path: poolAbs(asset.path),
           contentHash: asset.contentHash ?? "",
         },
         60 * 60 * 1000,
@@ -573,12 +574,12 @@ export class Dispatcher {
           if (seen.has(ref.assetId)) continue;
           seen.add(ref.assetId);
           const asset = await resolve(ref.assetId);
-          if (!asset || !fs.existsSync(asset.path)) {
+          if (!asset || !fs.existsSync(poolAbs(asset.path))) {
             await this.failExport(job, `original missing: ${ref.assetId}`);
             return;
           }
           artifacts.push({
-            path: asset.path,
+            path: poolAbs(asset.path),
             name: asset.path.split("/").pop() ?? `${asset.id}`,
           });
         }
@@ -595,7 +596,7 @@ export class Dispatcher {
           units.push({
             assetId: asset.id,
             ordinal: ref.ordinal,
-            path: asset.path,
+            path: poolAbs(asset.path),
           });
         }
         const got = await this.workerExport(
@@ -631,7 +632,7 @@ export class Dispatcher {
           const units = ordinals.map((ordinal) => ({
             assetId: asset.id,
             ordinal,
-            path: asset.path,
+            path: poolAbs(asset.path),
           }));
           const base = (asset.path.split("/").pop() ?? asset.id).replace(
             /\.(pptx|pdf|docx|ppt|doc)$/i,

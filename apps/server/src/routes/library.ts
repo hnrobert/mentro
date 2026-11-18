@@ -29,7 +29,7 @@ export function registerLibraryRoutes(
     async (request, reply) => {
       const group = await createGroup(
         request.body?.name,
-        request.body?.parentId,
+        request.body?.parentId ?? undefined,
       );
       return reply.code(201).send({ group });
     },
@@ -63,7 +63,7 @@ export function registerLibraryRoutes(
     };
   }>("/api/library", async (request) =>
     listLibrary(request.user!, {
-      groupId: request.query.groupId,
+      groupId: request.query.groupId ?? undefined,
       kind: request.query.kind,
       q: request.query.q,
       sort: request.query.sort,

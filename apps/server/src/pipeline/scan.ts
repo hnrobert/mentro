@@ -72,7 +72,6 @@ export interface ScanOptions {
    *  group/uploader stamped on their freshly created assets. */
   pendingMeta?: Array<{
     pathPrefix: string;
-    groupId: string | null;
     uploader: string | null;
   }>;
 }
@@ -108,11 +107,20 @@ export async function runSourceScan(
     let updated = 0;
     let enqueued = 0;
 
+    // Pool-relative storage: strip the source root prefix so all asset
+    // paths are expressed relative to the pool root (groups = dirs).
+    const relOf = (absPath: string): string => {
+      const root = source.rootPath.replace(/\/+$/, "");
+      return absPath.startsWith(`${root}/`)
+        ? absPath.slice(root.length + 1)
+        : absPath;
+    };
     for (const record of records) {
-      seen.add(record.path);
+      const rel = relOf(record.path);
+      seen.add(rel);
       const kind = KIND_BY_NUMBER[record.kind] ?? "other";
       const extractable = EXTRACTABLE.has(kind) && !record.oversized;
-      const prior = byPath.get(record.path);
+      const prior = byPath.get(rel);
 
       if (!prior) {
         const assetId = ulid();
@@ -122,7 +130,7 @@ export async function runSourceScan(
         newAssets.push({
           id: assetId,
           sourceId: source.id,
-          path: record.path,
+          path: rel,
           sizeBytes: Number(record.sizeBytes),
           mtimeMs: Number(record.mtimeMs),
           contentHash: record.contentHash || null,
@@ -130,7 +138,6 @@ export async function runSourceScan(
           kind,
           oversized: record.oversized,
           extractionStatus: extractable ? "pending" : "skipped",
-          groupId: meta?.groupId ?? null,
           uploadedBy: meta?.uploader ?? null,
           uploadedAt: new Date(),
         });

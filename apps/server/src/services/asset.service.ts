@@ -8,6 +8,7 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { ContentUnit } from "../db/entities";
 import { findAssetById } from "../repositories/asset.repository";
+import { poolAbs } from "./dir-meta";
 import {
   findUnitById,
   findUnitsOfAsset,
@@ -51,14 +52,14 @@ export async function assetFileStream(
   fileName: string;
 }> {
   const asset = await findAssetById(assetId);
-  if (!asset || !fs.existsSync(asset.path)) {
+  if (!asset || !fs.existsSync(poolAbs(asset.path))) {
     throw new ServiceError(404, "not found");
   }
   if (!(await canRead(user, asset.id))) {
     throw new ServiceError(403, "forbidden");
   }
   return {
-    stream: fs.createReadStream(asset.path),
+    stream: fs.createReadStream(poolAbs(asset.path)),
     mime: asset.mime,
     fileName: asset.path.split("/").pop() ?? "file",
   };
@@ -87,12 +88,16 @@ export async function resolveThumb(
   let thumbPath = unit.thumbPath;
   if (!thumbPath && pool) {
     const asset = await findAssetById(unit.assetId);
-    if (asset && RENDERABLE.has(asset.kind) && fs.existsSync(asset.path)) {
+    if (
+      asset &&
+      RENDERABLE.has(asset.kind) &&
+      fs.existsSync(poolAbs(asset.path))
+    ) {
       const resp = await pool.run((worker) =>
         worker.renderPage(
           {
             assetId: asset.id,
-            path: asset.path,
+            path: poolAbs(asset.path),
             ordinal: unit.ordinal,
             contentHash: asset.contentHash ?? "",
             full,
